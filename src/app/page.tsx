@@ -4,6 +4,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { ArrowRight } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
+import { MobileNav } from "@/components/mobile-nav"
 import { HeroSection } from "@/components/landing/hero-section"
 import { FeaturesSection } from "@/components/landing/features-section"
 import { IntegrationsSection } from "@/components/landing/integrations-section"
@@ -44,8 +45,8 @@ export default function HomePage() {
             <Link href="#results" className="text-sm font-medium text-neutral-400 hover:text-orange-400 transition-colors">Results</Link>
           </div>
 
-          {/* CTAs */}
-          <div className="flex items-center gap-2">
+          {/* Desktop CTAs (Hidden on mobile) */}
+          <div className="hidden md:flex items-center gap-2">
             <a href="#contact" className="flex items-center gap-2 bg-white/10 hover:bg-orange-500/20 border border-white/10 hover:border-orange-500/30 rounded-full px-4 py-2 transition-all group">
               <span className="text-sm font-medium text-white">Free Audit</span>
               <ArrowRight className="w-4 h-4 text-white group-hover:translate-x-0.5 transition-transform" />
@@ -56,9 +57,12 @@ export default function HomePage() {
             </Link>
           </div>
 
-          <div className="ml-1">
+          <div className="hidden md:block ml-1">
             <ThemeToggle />
           </div>
+
+          {/* Mobile Hamburger Menu */}
+          <MobileNav />
         </div>
       </nav>
 
