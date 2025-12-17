@@ -67,8 +67,8 @@ export function HeroSection() {
                 </a>
             </div>
 
-            {/* CARD 1: Top Left (Triggers) */}
-            <div className="hidden lg:block glass-card w-72 rounded-2xl p-4 absolute top-[15%] left-[5%] xl:left-[10%] animate-[aura-float-1_8s_ease-in-out_infinite]">
+            {/* CARD 1: Top Left (Triggers) - Flanking H1 */}
+            <div className="hidden lg:block glass-card w-72 rounded-2xl p-4 absolute top-40 left-[2%] xl:left-[5%] animate-[aura-float-1_8s_ease-in-out_infinite] z-30">
                 <div className="flex mb-4 items-center justify-between">
                     <span className="text-xs font-medium text-neutral-400">Trigger Source</span>
                     <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]"></div>
@@ -96,8 +96,8 @@ export function HeroSection() {
                 </div>
             </div>
 
-            {/* CARD 2: Top Right (AI Models) */}
-            <div className="hidden lg:block absolute right-[5%] xl:right-[10%] top-[20%] w-64 glass-card rounded-2xl p-1.5 space-y-1 animate-[aura-float-2_9s_ease-in-out_1s_infinite]">
+            {/* CARD 2: Top Right (AI Models) - Flanking H1 */}
+            <div className="hidden lg:block absolute right-[2%] xl:right-[5%] top-48 w-64 glass-card rounded-2xl p-1.5 space-y-1 animate-[aura-float-2_9s_ease-in-out_1s_infinite] z-30">
                 <div className="group flex items-center gap-3 p-3 rounded-xl border border-white/5 bg-neutral-900/40 hover:border-orange-500/30 transition-all cursor-pointer">
                     <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center border border-white/5 group-hover:bg-orange-500/10 group-hover:text-orange-400 transition-colors">
                         <BrainCircuit className="w-4 h-4" />
