@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import { ContactForm } from "@/components/contact-form"
 import { ArrowRight } from "lucide-react"
 
@@ -19,6 +20,14 @@ export function CTAFooter() {
 
                     {/* Contact Form Column */}
                     <div className="lg:w-1/2 max-w-2xl flex flex-col items-start justify-center">
+                        <div className="relative w-32 h-10 mb-8 opacity-50 grayscale hover:grayscale-0 transition-all duration-500">
+                            <Image
+                                src="/logo-white.png"
+                                alt="Enclave"
+                                fill
+                                className="object-contain"
+                            />
+                        </div>
                         <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight mb-6 leading-[1.1]">
                             <span className="text-neutral-500">Ready to upgrade</span>
                             <span className="text-white block">your business?</span>

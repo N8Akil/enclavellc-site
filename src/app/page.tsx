@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 import { Sparkles, ArrowRight } from "lucide-react"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { HeroSection } from "@/components/landing/hero-section"
@@ -15,11 +16,17 @@ export default function HomePage() {
 
       {/* Navigation */}
       <nav className="fixed top-6 left-1/2 -translate-x-1/2 z-50">
-        <div className="glass-card rounded-full p-1.5 pl-2 pr-2 flex items-center gap-1 animate-on-scroll">
-          {/* Logo Icon */}
-          <div className="flex text-white bg-gradient-to-br from-white/10 to-white/5 w-9 h-9 border-white/10 border rounded-full items-center justify-center">
-            <Sparkles className="w-5 h-5 text-orange-400" />
-          </div>
+        <div className="glass-card rounded-full p-2 pl-6 pr-2 flex items-center gap-4 animate-on-scroll">
+          {/* Logo */}
+          <Link href="/" className="relative w-28 h-8">
+            <Image
+              src="/logo-white.png"
+              alt="Enclave"
+              fill
+              className="object-contain"
+              priority
+            />
+          </Link>
 
           {/* Links (Hidden on mobile) */}
           <div className="hidden md:flex items-center px-4 gap-6">
