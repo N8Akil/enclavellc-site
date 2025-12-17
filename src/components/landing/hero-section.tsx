@@ -32,97 +32,101 @@ export function HeroSection() {
             <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[40rem] h-[40rem] bg-red-900/10 rounded-full blur-[100px] pointer-events-none z-0"></div>
             <div className="fixed bottom-0 left-1/2 -translate-x-1/2 w-[60rem] h-[40rem] bg-yellow-900/5 rounded-full blur-[120px] pointer-events-none z-0"></div>
 
-            {/* Badge */}
-            <div className="z-10 flex gap-2 glass-card bg-orange-950/20 border-orange-500/20 rounded-full mt-8 px-4 py-1.5 items-center animate-on-scroll">
-                <Cpu className="w-4 h-4 text-orange-400" />
-                <span className="text-sm font-medium text-orange-100">
-                    Digital Overhaul in Progress
-                </span>
-            </div>
+            {/* Content Wrapper for Layout Stability */}
+            <div className="relative w-full max-w-[90rem] mx-auto flex flex-col items-center z-20">
 
-            {/* NEURAL / AUTOMATION stacked headline */}
-            <h1 className="mt-10 text-center text-[12vw] md:text-[8rem] font-semibold tracking-[-0.05em] leading-[0.8] bg-clip-text text-transparent bg-gradient-to-b from-white via-neutral-200 to-neutral-600 glow-text z-20 relative animate-on-scroll">
-                <span className="block">DIGITAL</span>
-                <span className="block mt-2 text-white/50">OVERHAUL</span>
-            </h1>
-
-            {/* Description */}
-            <p className="mt-8 text-lg md:text-xl text-neutral-400 text-center max-w-2xl leading-relaxed font-normal animate-on-scroll">
-                We rebuild outdated websites and set up simple automations so your business looks legit and runs smoother — without you learning any “tech stuff.”
-            </p>
-
-            {/* CTA Buttons */}
-            <div className="flex mt-10 gap-x-3 gap-y-3 items-center animate-on-scroll z-20">
-                <a href="#contact" className="group flex hover:bg-orange-900/20 transition-all duration-300 bg-gradient-to-b from-orange-500/10 via-orange-500/0 to-orange-500/10 w-auto border-white/10 border rounded-full pt-2 pr-8 pb-2 pl-2 relative shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-2xl gap-x-4 gap-y-4 items-center overflow-hidden">
-                    {/* Border Beam Animation Layer */}
-                    <div className="absolute inset-0 rounded-full" style={{ maskImage: "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)", maskComposite: "exclude", padding: "1px", pointerEvents: "none" }}>
-                        <div className="absolute -inset-[100%] animate-[spin_3s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_0_300deg,#f97316_360deg)]"></div>
-                    </div>
-                    <div className="relative z-10 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-orange-600 text-white shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_4px_10px_rgba(249,115,22,0.3)]">
-                        <ArrowRight className="w-5 h-5" />
-                    </div>
-                    <span className="relative z-10 text-lg font-medium text-white tracking-tight">
-                        Get a Free Audit
+                {/* Badge */}
+                <div className="z-10 flex gap-2 glass-card bg-orange-950/20 border-orange-500/20 rounded-full mt-8 px-4 py-1.5 items-center animate-on-scroll">
+                    <Cpu className="w-4 h-4 text-orange-400" />
+                    <span className="text-sm font-medium text-orange-100">
+                        Digital Overhaul in Progress
                     </span>
-                </a>
-            </div>
+                </div>
 
-            {/* CARD 1: Top Left (Triggers) - Flanking H1 */}
-            <div className="hidden lg:block glass-card w-72 rounded-2xl p-4 absolute top-40 left-[2%] xl:left-[5%] animate-[aura-float-1_8s_ease-in-out_infinite] z-30">
-                <div className="flex mb-4 items-center justify-between">
-                    <span className="text-xs font-medium text-neutral-400">Trigger Source</span>
-                    <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]"></div>
-                </div>
-                <div className="w-full bg-neutral-900/50 border border-orange-500/30 rounded-lg p-2.5 flex items-center justify-between mb-3 shadow-[0_0_15px_-3px_rgba(249,115,22,0.1)]">
-                    <div className="flex items-center gap-2.5">
-                        <Webhook className="w-4 h-4 text-orange-400" />
-                        <span className="text-sm text-white font-medium">Contact Form</span>
-                    </div>
-                    <span className="text-xs font-mono text-neutral-500">POST</span>
-                </div>
-                <div className="space-y-1">
-                    <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors opacity-60">
-                        <Mail className="w-4 h-4 text-neutral-400" />
-                        <span className="text-sm font-medium">New Email</span>
-                    </div>
-                    <div className="flex items-center gap-3 p-2 rounded-lg bg-white/5 border border-white/5">
-                        <Database className="w-4 h-4 text-neutral-400" />
-                        <span className="text-sm font-medium">Row Created</span>
-                    </div>
-                    <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors opacity-60">
-                        <Clock className="w-4 h-4 text-neutral-500" />
-                        <span className="text-sm font-medium">Scheduled</span>
-                    </div>
-                </div>
-            </div>
+                {/* NEURAL / AUTOMATION stacked headline */}
+                <h1 className="mt-10 text-center text-[12vw] md:text-[8rem] font-semibold tracking-[-0.05em] leading-[0.8] bg-clip-text text-transparent bg-gradient-to-b from-white via-neutral-200 to-neutral-600 glow-text z-40 relative animate-on-scroll">
+                    <span className="block">DIGITAL</span>
+                    <span className="block mt-2 text-white/50">OVERHAUL</span>
+                </h1>
 
-            {/* CARD 2: Top Right (AI Models) - Flanking H1 */}
-            <div className="hidden lg:block absolute right-[2%] xl:right-[5%] top-48 w-64 glass-card rounded-2xl p-1.5 space-y-1 animate-[aura-float-2_9s_ease-in-out_1s_infinite] z-30">
-                <div className="group flex items-center gap-3 p-3 rounded-xl border border-white/5 bg-neutral-900/40 hover:border-orange-500/30 transition-all cursor-pointer">
-                    <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center border border-white/5 group-hover:bg-orange-500/10 group-hover:text-orange-400 transition-colors">
-                        <BrainCircuit className="w-4 h-4" />
+                {/* Description */}
+                <p className="mt-8 text-lg md:text-xl text-neutral-400 text-center max-w-2xl leading-relaxed font-normal animate-on-scroll z-40 relative">
+                    We rebuild outdated websites and set up simple automations so your business looks legit and runs smoother — without you learning any “tech stuff.”
+                </p>
+
+                {/* CTA Buttons */}
+                <div className="flex mt-10 gap-x-3 gap-y-3 items-center animate-on-scroll z-40 relative">
+                    <a href="#contact" className="group flex hover:bg-orange-900/20 transition-all duration-300 bg-gradient-to-b from-orange-500/10 via-orange-500/0 to-orange-500/10 w-auto border-white/10 border rounded-full pt-2 pr-8 pb-2 pl-2 relative shadow-[0_8px_30px_rgb(0,0,0,0.12)] backdrop-blur-2xl gap-x-4 gap-y-4 items-center overflow-hidden">
+                        {/* Border Beam Animation Layer */}
+                        <div className="absolute inset-0 rounded-full" style={{ maskImage: "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)", maskComposite: "exclude", padding: "1px", pointerEvents: "none" }}>
+                            <div className="absolute -inset-[100%] animate-[spin_3s_linear_infinite] bg-[conic-gradient(from_0deg,transparent_0_300deg,#f97316_360deg)]"></div>
+                        </div>
+                        <div className="relative z-10 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-orange-600 text-white shadow-[inset_0_1px_1px_rgba(255,255,255,0.3),0_4px_10px_rgba(249,115,22,0.3)]">
+                            <ArrowRight className="w-5 h-5" />
+                        </div>
+                        <span className="relative z-10 text-lg font-medium text-white tracking-tight">
+                            Get a Free Audit
+                        </span>
+                    </a>
+                </div>
+
+                {/* CARD 1: Top Left (Triggers) - Flanking H1 */}
+                <div className="hidden 2xl:block glass-card w-72 rounded-2xl p-4 absolute top-1/2 -translate-y-[60%] left-0 animate-[aura-float-1_8s_ease-in-out_infinite] z-10 opacity-80 hover:opacity-100 transition-opacity">
+                    <div className="flex mb-4 items-center justify-between">
+                        <span className="text-xs font-medium text-neutral-400">Trigger Source</span>
+                        <div className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]"></div>
                     </div>
-                    <div className="flex flex-col">
-                        <span className="text-sm font-medium">Analyze Lead</span>
-                        <span className="text-[10px] text-neutral-500">AI Logic</span>
+                    <div className="w-full bg-neutral-900/50 border border-orange-500/30 rounded-lg p-2.5 flex items-center justify-between mb-3 shadow-[0_0_15px_-3px_rgba(249,115,22,0.1)]">
+                        <div className="flex items-center gap-2.5">
+                            <Webhook className="w-4 h-4 text-orange-400" />
+                            <span className="text-sm text-white font-medium">Contact Form</span>
+                        </div>
+                        <span className="text-xs font-mono text-neutral-500">POST</span>
+                    </div>
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors opacity-60">
+                            <Mail className="w-4 h-4 text-neutral-400" />
+                            <span className="text-sm font-medium">New Email</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-2 rounded-lg bg-white/5 border border-white/5">
+                            <Database className="w-4 h-4 text-neutral-400" />
+                            <span className="text-sm font-medium">Row Created</span>
+                        </div>
+                        <div className="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors opacity-60">
+                            <Clock className="w-4 h-4 text-neutral-500" />
+                            <span className="text-sm font-medium">Scheduled</span>
+                        </div>
                     </div>
                 </div>
-                <div className="group flex items-center gap-3 p-3 rounded-xl border border-white/5 bg-neutral-900/40 hover:border-red-500/30 transition-all cursor-pointer">
-                    <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center border border-white/5 group-hover:bg-red-500/10 group-hover:text-red-400 transition-colors">
-                        <FileText className="w-4 h-4" />
+
+                {/* CARD 2: Top Right (AI Models) - Flanking H1 */}
+                <div className="hidden 2xl:block absolute right-0 top-1/2 -translate-y-[60%] w-64 glass-card rounded-2xl p-1.5 space-y-1 animate-[aura-float-2_9s_ease-in-out_1s_infinite] z-10 opacity-80 hover:opacity-100 transition-opacity">
+                    <div className="group flex items-center gap-3 p-3 rounded-xl border border-white/5 bg-neutral-900/40 hover:border-orange-500/30 transition-all cursor-pointer">
+                        <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center border border-white/5 group-hover:bg-orange-500/10 group-hover:text-orange-400 transition-colors">
+                            <BrainCircuit className="w-4 h-4" />
+                        </div>
+                        <div className="flex flex-col">
+                            <span className="text-sm font-medium">Analyze Lead</span>
+                            <span className="text-[10px] text-neutral-500">AI Logic</span>
+                        </div>
                     </div>
-                    <div className="flex flex-col">
-                        <span className="text-sm font-medium">Draft Proposal</span>
-                        <span className="text-[10px] text-neutral-500">Auto-Generate</span>
+                    <div className="group flex items-center gap-3 p-3 rounded-xl border border-white/5 bg-neutral-900/40 hover:border-red-500/30 transition-all cursor-pointer">
+                        <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center border border-white/5 group-hover:bg-red-500/10 group-hover:text-red-400 transition-colors">
+                            <FileText className="w-4 h-4" />
+                        </div>
+                        <div className="flex flex-col">
+                            <span className="text-sm font-medium">Draft Proposal</span>
+                            <span className="text-[10px] text-neutral-500">Auto-Generate</span>
+                        </div>
                     </div>
-                </div>
-                <div className="group flex items-center gap-3 p-3 rounded-xl border border-white/5 bg-neutral-900/40 hover:border-yellow-500/30 transition-all cursor-pointer">
-                    <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center border border-white/5 group-hover:bg-yellow-500/10 group-hover:text-yellow-400 transition-colors">
-                        <MessageSquare className="w-4 h-4" />
-                    </div>
-                    <div className="flex flex-col">
-                        <span className="text-sm font-medium">Notify Team</span>
-                        <span className="text-[10px] text-neutral-500">Slack / SMS</span>
+                    <div className="group flex items-center gap-3 p-3 rounded-xl border border-white/5 bg-neutral-900/40 hover:border-yellow-500/30 transition-all cursor-pointer">
+                        <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center border border-white/5 group-hover:bg-yellow-500/10 group-hover:text-yellow-400 transition-colors">
+                            <MessageSquare className="w-4 h-4" />
+                        </div>
+                        <div className="flex flex-col">
+                            <span className="text-sm font-medium">Notify Team</span>
+                            <span className="text-[10px] text-neutral-500">Slack / SMS</span>
+                        </div>
                     </div>
                 </div>
             </div>
