@@ -1,169 +1,240 @@
 "use client"
 
-import { RadioReceiver, Sparkles, Zap, Plus, ArrowRight } from "lucide-react"
+import { Globe, Zap, FileText, ClipboardCheck, Wrench, Rocket, Camera, Share2, Search } from "lucide-react"
 
 export function FeaturesSection() {
     return (
-        <section className="md:px-10 overflow-hidden bg-neutral-950 w-full max-w-7xl border-white/5 border rounded-3xl mt-24 mx-auto pt-24 pr-6 pb-24 pl-6 relative">
-            {/* Background Text */}
-            <div className="-translate-x-1/2 z-0 pointer-events-none select-none text-center w-full absolute top-24 left-1/2" style={{ maskImage: "linear-gradient(180deg, transparent, black 0%, black 60%, transparent)", WebkitMaskImage: "linear-gradient(180deg, transparent, black 0%, black 60%, transparent)" }}>
-                <span className="text-[12vw] lg:text-[15rem] leading-none whitespace-nowrap font-bold text-white/5 tracking-tighter">
-                    Capabilities
-                </span>
-            </div>
-
-            <div className="flex flex-col lg:flex-row text-left z-10 mb-20 relative gap-x-8 gap-y-8 justify-between animate-on-scroll">
-                <div className="max-w-2xl lg:text-left">
-                    <h2 className="leading-[1.05] md:text-6xl text-5xl font-bold text-white tracking-tight">
-                        Our Services
-                    </h2>
+        <>
+            {/* Services Section */}
+            <section id="services" className="scroll-mt-24 md:px-10 overflow-hidden bg-[var(--color-surface)] w-full max-w-7xl border border-[var(--color-border)] rounded-3xl mt-24 mx-auto pt-24 pr-6 pb-24 pl-6 relative">
+                {/* Background Text */}
+                <div className="-translate-x-1/2 z-0 pointer-events-none select-none text-center w-full absolute top-24 left-1/2" style={{ maskImage: "linear-gradient(180deg, transparent, black 0%, black 60%, transparent)", WebkitMaskImage: "linear-gradient(180deg, transparent, black 0%, black 60%, transparent)" }}>
+                    <span className="text-[12vw] lg:text-[15rem] leading-none whitespace-nowrap font-bold text-[var(--color-text-primary)] opacity-[0.03] tracking-tighter">
+                        Services
+                    </span>
                 </div>
-                <div className="max-w-md lg:text-right">
-                    <p className="md:text-lg leading-relaxed text-base font-light text-neutral-400">
-                        Discover the cutting-edge capabilities designed to transform your business operations.
-                    </p>
-                </div>
-            </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 z-10 mt-32 pt-0 relative gap-x-8 gap-y-6">
-
-                {/* CARD 1: Growth / Chart */}
-                <div className="group flex flex-col transition-all duration-500 overflow-hidden shadow-black/50 bg-gradient-to-r from-white/10 to-white/0 h-[540px] rounded-2xl p-2 relative shadow-2xl backdrop-blur-md animate-on-scroll">
-                    <div className="overflow-hidden flex-1 bg-gradient-to-br from-black/10 to-black/0 w-full rounded-xl mb-4 relative border border-white/10">
-                        <div className="overflow-hidden w-full h-full relative" style={{ maskImage: "linear-gradient(90deg, transparent, black 0%, black 80%, transparent)" }}>
-                            {/* Badge */}
-                            <div className="absolute top-4 left-4 px-3 py-1.5 bg-black/70 border border-white/10 rounded-full text-xs text-white shadow-xl backdrop-blur-sm z-20 flex items-center gap-2">
-                                <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse"></span>
-                                <span>Performance: +42%</span>
-                            </div>
-
-                            {/* SVG Graph */}
-                            <svg className="absolute inset-0 w-full h-full" viewBox="0 0 500 260" preserveAspectRatio="none">
-                                {/* Grid */}
-                                <g stroke="#636b7a" strokeWidth="0.5" opacity="0.15">
-                                    <path d="M0 40 H500" />
-                                    <path d="M0 80 H500" />
-                                    <path d="M0 120 H500" />
-                                    <path d="M0 160 H500" />
-                                    <path d="M0 200 H500" />
-                                </g>
-
-                                {/* Orange Curve (Main) */}
-                                <path d="M0,180 C80,165 150,130 220,125 C290,120 340,130 390,148 C440,160 470,182 500,188"
-                                    fill="none"
-                                    stroke="#f97316"
-                                    strokeWidth="2.5"
-                                    className="animate-[draw-chart-line_2.5s_cubic-bezier(0.25,0.46,0.45,0.94)_forwards]"
-                                />
-                                {/* Fill Area */}
-                                <path d="M0,180 C80,165 150,130 220,125 C290,120 340,130 390,148 C440,160 470,182 500,188 L500,260 L0,260 Z"
-                                    fill="#f97316"
-                                    fillOpacity="0.15"
-                                    className="opacity-0 animate-[fade-in-chart_1.5s_ease-out_0.5s_forwards]"
-                                />
-                            </svg>
-                        </div>
+                <div className="flex flex-col lg:flex-row text-left z-10 mb-20 relative gap-x-8 gap-y-8 justify-between animate-on-scroll">
+                    <div className="max-w-2xl lg:text-left">
+                        <h2 className="leading-[1.05] md:text-6xl text-5xl font-bold text-[var(--color-text-primary)] tracking-tight">
+                            Services
+                        </h2>
                     </div>
-                    <div className="z-20 p-4 relative">
-                        <h3 className="text-2xl font-semibold text-white tracking-tight mb-2">Results Driven</h3>
-                        <p className="text-sm text-neutral-400 leading-relaxed font-light">
-                            Websites designed to convert. Analytics proving the value.
+                    <div className="max-w-md lg:text-right">
+                        <p className="md:text-lg leading-relaxed text-base font-light text-[var(--color-text-secondary)]">
+                            Practical ways we modernize your business without adding complexity.
                         </p>
                     </div>
                 </div>
 
-                {/* CARD 2: Workflow Steps */}
-                <div className="group flex flex-col transition-all duration-500 overflow-hidden shadow-black/50 bg-gradient-to-r from-white/10 to-white/0 h-[540px] rounded-2xl p-2 relative shadow-2xl backdrop-blur-md animate-on-scroll">
-                    <div className="flex-1 overflow-y-auto custom-scrollbar bg-neutral-950/40 rounded-lg p-4 relative border border-white/10">
-                        <div className="relative flex flex-col items-center w-full max-w-md mx-auto">
-                            {/* Step 1 */}
-                            <div className="flex gap-3 bg-gradient-to-b from-black/10 to-black/0 w-full border border-white/10 rounded-xl px-4 py-3 relative shadow-lg items-center">
-                                <div className="w-10 h-10 rounded-xl bg-neutral-700 flex items-center justify-center text-neutral-300 border border-white/10">
-                                    <RadioReceiver className="w-5 h-5" />
-                                </div>
-                                <div className="flex flex-col">
-                                    <span className="text-xs uppercase tracking-[0.18em] text-white/40">Step 1</span>
-                                    <span className="text-base font-medium text-white">Audit</span>
-                                </div>
-                            </div>
-                            {/* Connector */}
-                            <div className="flex w-full mt-4 mb-4 relative justify-center">
-                                <div className="absolute inset-y-0 w-px bg-white/10"></div>
-                                <div className="z-10 w-8 h-8 rounded-full bg-orange-600 flex items-center justify-center text-white ring-2 ring-neutral-800/80">
-                                    <Plus className="w-4 h-4" />
-                                </div>
-                            </div>
-                            {/* Step 2 */}
-                            <div className="flex gap-3 bg-gradient-to-b from-black/10 to-black/0 w-full border border-orange-500/30 rounded-xl px-4 py-3 relative shadow-lg items-center">
-                                <div className="w-10 h-10 rounded-xl bg-orange-600/20 flex items-center justify-center text-orange-300 border border-orange-600/30">
-                                    <Sparkles className="w-5 h-5" />
-                                </div>
-                                <div className="flex flex-col">
-                                    <span className="text-xs uppercase tracking-[0.18em] text-orange-300/70">Core Phase</span>
-                                    <span className="text-base font-medium text-white">Build & Automate</span>
-                                </div>
-                            </div>
-                            {/* Connector */}
-                            <div className="flex w-full mt-4 mb-4 relative justify-center">
-                                <div className="absolute inset-y-0 w-px bg-white/10"></div>
-                                <div className="z-10 w-8 h-8 rounded-full bg-orange-600 flex items-center justify-center text-white ring-2 ring-neutral-800/80">
-                                    <Plus className="w-4 h-4" />
-                                </div>
-                            </div>
-                            {/* Step 3 */}
-                            <div className="flex gap-3 bg-gradient-to-b from-black/10 to-black/0 w-full border border-white/10 rounded-xl px-4 py-3 relative shadow-lg items-center">
-                                <div className="w-10 h-10 rounded-xl bg-neutral-700 flex items-center justify-center text-neutral-200 border border-white/10">
-                                    <Zap className="w-5 h-5" />
-                                </div>
-                                <div className="flex flex-col">
-                                    <span className="text-xs uppercase tracking-[0.18em] text-white/40">Step 3</span>
-                                    <span className="text-base font-medium text-white">Launch & Scale</span>
-                                </div>
-                            </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 z-10 mt-16 pt-0 relative gap-8">
+
+                    {/* Service 1: Website Audit (FREE) */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="absolute top-4 right-4 bg-neutral-500/20 text-neutral-400 text-xs font-bold px-2 py-1 rounded-full">
+                            FREE
                         </div>
+                        <div className="w-14 h-14 rounded-xl bg-neutral-500/10 flex items-center justify-center mb-6">
+                            <Search className="w-7 h-7 text-neutral-400" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Website Audit</h3>
+                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            <li className="flex items-start gap-2">
+                                <span className="text-neutral-400 mt-1">•</span>
+                                <span>Full site performance analysis</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-neutral-400 mt-1">•</span>
+                                <span>Lead capture assessment</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-neutral-400 mt-1">•</span>
+                                <span>Actionable recommendations</span>
+                            </li>
+                        </ul>
                     </div>
-                    <div className="z-20 p-4 relative">
-                        <h3 className="text-2xl font-semibold text-white tracking-tight mb-2">Process</h3>
-                        <p className="text-sm text-neutral-400 leading-relaxed font-light">
-                            Simple 3-step execution to modernize your business.
+
+                    {/* Service 2: Content Creation ($999/mo) */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="w-14 h-14 rounded-xl bg-purple-500/10 flex items-center justify-center mb-6">
+                            <Camera className="w-7 h-7 text-purple-500" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Content Creation</h3>
+                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            <li className="flex items-start gap-2">
+                                <span className="text-purple-500 mt-1">•</span>
+                                <span>4 blog posts per month</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-purple-500 mt-1">•</span>
+                                <span>Social media graphics</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-purple-500 mt-1">•</span>
+                                <span>Email newsletter copy</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    {/* Service 3: Social Media Management ($1,299/mo) */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="w-14 h-14 rounded-xl bg-blue-500/10 flex items-center justify-center mb-6">
+                            <Share2 className="w-7 h-7 text-blue-500" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Social Media Management</h3>
+                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            <li className="flex items-start gap-2">
+                                <span className="text-blue-500 mt-1">•</span>
+                                <span>3 platforms managed</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-blue-500 mt-1">•</span>
+                                <span>Daily posting schedule</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-blue-500 mt-1">•</span>
+                                <span>Community engagement + analytics</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    {/* Service 4: Automation Setup ($1,499) */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="w-14 h-14 rounded-xl bg-[var(--color-accent-red-dim)] flex items-center justify-center mb-6">
+                            <Zap className="w-7 h-7 text-[var(--color-accent-red)]" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Automation Setup</h3>
+                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-red)] mt-1">•</span>
+                                <span>Forms → notifications → follow-up</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-red)] mt-1">•</span>
+                                <span>Scheduling + intake flow</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-red)] mt-1">•</span>
+                                <span>Fewer missed leads, less admin work</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    {/* Service 5: Website Rebuild ($2,499) */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="w-14 h-14 rounded-xl bg-[var(--color-accent-orange-dim)] flex items-center justify-center mb-6">
+                            <Globe className="w-7 h-7 text-[var(--color-accent-orange)]" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Website Rebuild</h3>
+                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-orange)] mt-1">•</span>
+                                <span>Modern design (mobile-first)</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-orange)] mt-1">•</span>
+                                <span>Faster load times + SEO basics</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-orange)] mt-1">•</span>
+                                <span>Built to convert calls and form submissions</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    {/* Service 6: Full Digital Overhaul ($3,499) */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="w-14 h-14 rounded-xl bg-[var(--color-accent-yellow-dim)] flex items-center justify-center mb-6">
+                            <FileText className="w-7 h-7 text-[var(--color-accent-yellow)]" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Full Digital Overhaul</h3>
+                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-yellow)] mt-1">•</span>
+                                <span>Website rebuild + automation</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-yellow)] mt-1">•</span>
+                                <span>Professional copywriting</span>
+                            </li>
+                            <li className="flex items-start gap-2">
+                                <span className="text-[var(--color-accent-yellow)] mt-1">•</span>
+                                <span>Priority support for 30 days</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                </div>
+            </section>
+
+            {/* How It Works Section */}
+            <section id="process" className="scroll-mt-24 md:px-10 overflow-hidden bg-[var(--color-background)] w-full max-w-7xl border border-[var(--color-border)] rounded-3xl mt-24 mx-auto pt-24 pr-6 pb-24 pl-6 relative">
+                {/* Background Text */}
+                <div className="-translate-x-1/2 z-0 pointer-events-none select-none text-center w-full absolute top-24 left-1/2" style={{ maskImage: "linear-gradient(180deg, transparent, black 0%, black 60%, transparent)", WebkitMaskImage: "linear-gradient(180deg, transparent, black 0%, black 60%, transparent)" }}>
+                    <span className="text-[12vw] lg:text-[15rem] leading-none whitespace-nowrap font-bold text-[var(--color-text-primary)] opacity-[0.03] tracking-tighter">
+                        Process
+                    </span>
+                </div>
+
+                <div className="flex flex-col lg:flex-row text-left z-10 mb-20 relative gap-x-8 gap-y-8 justify-between animate-on-scroll">
+                    <div className="max-w-2xl lg:text-left">
+                        <h2 className="leading-[1.05] md:text-6xl text-5xl font-bold text-[var(--color-text-primary)] tracking-tight">
+                            How It Works
+                        </h2>
+                    </div>
+                    <div className="max-w-md lg:text-right">
+                        <p className="md:text-lg leading-relaxed text-base font-light text-[var(--color-text-secondary)]">
+                            A straightforward engagement from assessment to launch.
                         </p>
                     </div>
                 </div>
 
-                {/* CARD 3: Semantic/Data */}
-                <div className="group flex flex-col transition-all duration-500 overflow-hidden shadow-black/50 bg-gradient-to-r from-white/10 to-white/0 h-[540px] rounded-2xl p-2 relative shadow-2xl backdrop-blur-md animate-on-scroll">
-                    <div className="flex-1 overflow-y-auto custom-scrollbar bg-neutral-950/40 rounded-lg p-4 border border-white/10">
-                        {/* Abstract Grid Visualization */}
-                        <div className="grid grid-cols-3 gap-2.5">
-                            <div className="aspect-[3/2] rounded-lg border border-white/5 bg-white/[0.01]"></div>
-                            <div className="aspect-[3/2] rounded-lg border border-white/10 bg-white/[0.02] flex flex-col justify-center px-2.5 py-2 gap-1.5">
-                                <div className="h-0.5 w-3 bg-neutral-600 rounded-full"></div>
-                                <div className="h-0.5 w-full bg-neutral-700/50 rounded-full"></div>
-                            </div>
-                            <div className="aspect-[3/2] rounded-lg border border-white/5 bg-white/[0.01]"></div>
+                <div className="grid grid-cols-1 md:grid-cols-3 z-10 mt-16 pt-0 relative gap-8">
 
-                            {/* Highlighted Tile */}
-                            <div className="col-span-1 aspect-[3/2] rounded-lg border border-white/20 bg-white/[0.06] flex flex-col justify-center px-2.5 py-2 gap-1.5 shadow-[0_0_20px_-8px_rgba(255,255,255,0.2)] relative">
-                                <div className="h-0.5 w-3 bg-neutral-400 rounded-full"></div>
-                                <div className="h-0.5 w-full bg-neutral-600 rounded-full"></div>
-                                <div className="absolute -right-3.5 top-1/2 -translate-y-1/2 w-7 h-7 bg-neutral-800 rounded-full border border-white/10 flex items-center justify-center shadow-lg z-20">
-                                    <ArrowRight className="w-3 h-3 text-white" />
-                                </div>
+                    {/* Step 1: Audit */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="w-10 h-10 rounded-full bg-[var(--color-accent-orange)] flex items-center justify-center text-white font-bold">
+                                1
                             </div>
-
-                            <div className="aspect-[3/2] rounded-lg border border-white/5 bg-white/[0.01]"></div>
-                            <div className="aspect-[3/2] rounded-lg border border-white/5 bg-white/[0.01]"></div>
+                            <ClipboardCheck className="w-6 h-6 text-[var(--color-accent-orange)]" />
                         </div>
-                    </div>
-                    <div className="z-20 p-4 relative">
-                        <h3 className="text-2xl font-semibold text-white tracking-tight mb-2">Intelligence</h3>
-                        <p className="text-sm text-neutral-400 leading-relaxed font-light">
-                            Context-aware automations that understand your business needs.
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Audit</h3>
+                        <p className="text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            We review your site and your lead process. You get a clear punch list of what needs to change.
                         </p>
                     </div>
-                </div>
 
-            </div>
-        </section>
+                    {/* Step 2: Build */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="w-10 h-10 rounded-full bg-[var(--color-accent-red)] flex items-center justify-center text-white font-bold">
+                                2
+                            </div>
+                            <Wrench className="w-6 h-6 text-[var(--color-accent-red)]" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Build</h3>
+                        <p className="text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            We rebuild the site and wire up automation that fits your business. You stay in the loop without doing the work.
+                        </p>
+                    </div>
+
+                    {/* Step 3: Launch */}
+                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="w-10 h-10 rounded-full bg-[var(--color-accent-yellow)] flex items-center justify-center text-white font-bold">
+                                3
+                            </div>
+                            <Rocket className="w-6 h-6 text-[var(--color-accent-yellow)]" />
+                        </div>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Launch</h3>
+                        <p className="text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                            We go live cleanly. You get a setup that's easy to run and maintain going forward.
+                        </p>
+                    </div>
+
+                </div>
+            </section>
+        </>
     )
 }
