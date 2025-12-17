@@ -3,77 +3,55 @@
 
 /*
  * Enclave LLC Design System
- * Platinum/Brushed Metal theme with Red/Orange/Yellow accents
- * Light + Dark mode support
+ * Theme: Dark Platinum/Brushed Metal
+ * Accents: Red/Orange/Yellow (Fire)
  */
 
 @theme inline {
   /* ===== COLORS ===== */
 
-  /* Background colors */
-  --color-background: oklch(98% 0.005 250);
-  --color-background-dark: oklch(15% 0.01 250);
+  /* Backgrounds: Deep black/gray platinum feel */
+  --color-background: #000000;
+  --color-surface: #0a0a0a;
 
-  /* Surface colors (cards, panels) */
-  --color-surface: oklch(96% 0.005 250);
-  --color-surface-dark: oklch(20% 0.01 250);
-  --color-surface-elevated: oklch(100% 0 0);
-  --color-surface-elevated-dark: oklch(25% 0.01 250);
+  /* Text */
+  --color-text-primary: #ededed;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #52525b;
 
-  /* Border colors */
-  --color-border: oklch(88% 0.01 250);
-  --color-border-dark: oklch(30% 0.01 250);
+  /* Accents - The "Fire" Palette */
+  --color-accent-red: #ef4444;
+  /* red-500 */
+  --color-accent-orange: #f97316;
+  /* orange-500 */
+  --color-accent-yellow: #eab308;
+  /* yellow-500 */
 
-  /* Text colors */
-  --color-text-primary: oklch(20% 0.01 250);
-  --color-text-primary-dark: oklch(95% 0.005 250);
-  --color-text-secondary: oklch(45% 0.01 250);
-  --color-text-secondary-dark: oklch(70% 0.01 250);
-  --color-text-muted: oklch(60% 0.01 250);
-  --color-text-muted-dark: oklch(55% 0.01 250);
+  /* Accents - Dimmed for glows/backgrounds */
+  --color-accent-red-dim: rgba(239, 68, 68, 0.1);
+  --color-accent-orange-dim: rgba(249, 115, 22, 0.1);
+  --color-accent-yellow-dim: rgba(234, 179, 8, 0.1);
 
-  /* Brand colors - Platinum/Steel */
-  --color-platinum: oklch(75% 0.01 250);
-  --color-steel: oklch(55% 0.02 250);
-  --color-brushed-metal: oklch(65% 0.015 250);
+  /* Borders */
+  --color-border: rgba(255, 255, 255, 0.1);
 
-  /* Accent colors - Red/Orange/Yellow */
-  --color-accent-red: oklch(55% 0.22 25);
-  --color-accent-orange: oklch(65% 0.2 45);
-  --color-accent-yellow: oklch(80% 0.15 85);
-  --color-accent-gradient: linear-gradient(135deg, var(--color-accent-red), var(--color-accent-orange), var(--color-accent-yellow));
+  /* Glass */
+  --color-glass: rgba(10, 10, 10, 0.6);
+  --color-glass-border: rgba(255, 255, 255, 0.08);
 
-  /* Status colors */
-  --color-success: oklch(65% 0.17 145);
-  --color-warning: oklch(75% 0.15 70);
-  --color-error: oklch(55% 0.2 25);
+  /* ===== ANIMATIONS ===== */
+  --animate-in: animationIn 0.8s ease-out 0.1s both;
+  --animate-float-1: aura-float-1 8s ease-in-out infinite;
+  --animate-float-2: aura-float-2 9s ease-in-out 1s infinite;
+  --animate-float-3: aura-float-3 10s ease-in-out 2s infinite;
+  --animate-float-4: aura-float-4 11s ease-in-out 0.5s infinite;
+  --animate-draw-line: draw-chart-line 2.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+  --animate-chart-fill: fade-in-chart 1.5s ease-out 0.5s forwards;
+  --animate-marque-up: marquee-up 40s linear infinite;
+  --animate-marque-down: marquee-down 40s linear infinite;
+  --animate-flow-line: flow-line 4s linear infinite;
 
-  /* Glass morphism */
-  --color-glass-light: oklch(100% 0 0 / 0.7);
-  --color-glass-dark: oklch(20% 0.01 250 / 0.7);
-  --color-glass-border: oklch(100% 0 0 / 0.2);
-
-  /* ===== TYPOGRAPHY ===== */
-  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
-
-  /* ===== SPACING ===== */
-  --spacing-section: clamp(4rem, 10vw, 8rem);
-  --spacing-container: clamp(1rem, 5vw, 2rem);
-
-  /* ===== BORDERS ===== */
-  --radius-sm: 0.375rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
-  --radius-xl: 1rem;
-  --radius-2xl: 1.5rem;
-
-  /* ===== SHADOWS ===== */
-  --shadow-sm: 0 1px 2px 0 oklch(0% 0 0 / 0.05);
-  --shadow-md: 0 4px 6px -1px oklch(0% 0 0 / 0.1), 0 2px 4px -2px oklch(0% 0 0 / 0.1);
-  --shadow-lg: 0 10px 15px -3px oklch(0% 0 0 / 0.1), 0 4px 6px -4px oklch(0% 0 0 / 0.1);
-  --shadow-xl: 0 20px 25px -5px oklch(0% 0 0 / 0.1), 0 8px 10px -6px oklch(0% 0 0 / 0.1);
-  --shadow-glow: 0 0 20px oklch(65% 0.2 45 / 0.3);
+  /* Keyframes defined below in base/utility layers or standard css */
 }
 
 /* Base styles */
@@ -82,88 +60,191 @@ html {
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
   background-color: var(--color-background);
   color: var(--color-text-primary);
   line-height: 1.6;
+  overflow-x: hidden;
 }
 
-/* Dark mode */
-.dark body {
-  background-color: var(--color-background-dark);
-  color: var(--color-text-primary-dark);
+/* Smooth glowing effects text */
+.glow-text {
+  text-shadow: 0 0 40px rgba(255, 255, 255, 0.1);
 }
 
-/* Selection highlight */
-::selection {
-  background-color: var(--color-accent-orange);
-  color: white;
-}
-
-/* Focus styles */
-:focus-visible {
-  outline: 2px solid var(--color-accent-orange);
-  outline-offset: 2px;
-}
-
-/* Smooth scrollbar */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--color-surface);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--color-steel);
-}
-
-.dark ::-webkit-scrollbar-track {
-  background: var(--color-surface-dark);
-}
-
-.dark ::-webkit-scrollbar-thumb {
-  background: var(--color-border-dark);
-}
-
-/* Utility classes */
-.glass {
-  background: var(--color-glass-light);
+/* Glass Card Utility */
+.glass-card {
+  background: var(--color-glass);
   backdrop-filter: blur(12px);
   border: 1px solid var(--color-glass-border);
-}
-
-.dark .glass {
-  background: var(--color-glass-dark);
-}
-
-.gradient-text {
-  background: var(--color-accent-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.gradient-border {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 20px 40px -10px rgba(0, 0, 0, 0.5);
   position: relative;
 }
 
-.gradient-border::before {
-  content: '';
+.glass-card::before {
+  content: "";
   position: absolute;
   inset: 0;
-  padding: 2px;
-  background: var(--color-accent-gradient);
   border-radius: inherit;
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  mask-composite: xor;
+  padding: 1px;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.15), transparent);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
+  mask-composite: exclude;
   pointer-events: none;
+}
+
+.iconify {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+}
+
+/* ===== KEYFRAMES ===== */
+
+@keyframes animationIn {
+  0% {
+    opacity: 0;
+    transform: translateY(30px);
+    filter: blur(8px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0px);
+  }
+}
+
+@keyframes aura-float-1 {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes aura-float-2 {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes aura-float-3 {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@keyframes aura-float-4 {
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes draw-chart-line {
+  0% {
+    stroke-dashoffset: 1000;
+  }
+
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes fade-in-chart {
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes marquee-up {
+  0% {
+    transform: translateY(0);
+  }
+
+  100% {
+    transform: translateY(-50%);
+  }
+}
+
+@keyframes marquee-down {
+  0% {
+    transform: translateY(-50%);
+  }
+
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes flow-line {
+  0% {
+    stroke-dashoffset: 1000;
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  90% {
+    opacity: 1;
+  }
+
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+/* Utility for Animate on Scroll */
+.animate-on-scroll {
+  opacity: 0;
+  /* Hidden initially */
+}
+
+.animate-on-scroll.animate {
+  animation: animationIn 0.8s ease-out 0.1s both;
+  opacity: 1;
+}
+
+/* Custom Scrollbar for inner elements */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
 }
