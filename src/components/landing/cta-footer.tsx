@@ -20,10 +20,11 @@ export function CTAFooter() {
             </div>
 
             <div className="px-6 pt-16 pb-12 md:px-4 relative z-10 animate-on-scroll">
-                <div className="flex flex-col lg:flex-row justify-between gap-16 lg:gap-12">
+                {/* Main Split Layout: Form + Video */}
+                <div className="flex flex-col lg:flex-row gap-12 lg:gap-16 items-stretch">
 
-                    {/* Form Column */}
-                    <div className="lg:w-1/2 max-w-2xl flex flex-col items-start justify-center">
+                    {/* Left Side: Form Column */}
+                    <div className="lg:w-1/2 flex flex-col items-start justify-center">
                         <div className="flex items-center gap-4 mb-8 group">
                             <div className="relative w-14 h-14 opacity-70 group-hover:opacity-100 transition-all duration-500">
                                 <Image
@@ -96,8 +97,36 @@ export function CTAFooter() {
                         </p>
                     </div>
 
-                    {/* Links Columns */}
-                    <div className="flex flex-col sm:flex-row gap-16 lg:gap-24 lg:mr-10 pt-10 lg:pt-0">
+                    {/* Right Side: Preview Image */}
+                    <div className="hidden lg:flex lg:w-1/2 items-center justify-center relative z-20">
+                        <div className="relative w-full max-w-sm aspect-[9/16] rounded-2xl overflow-hidden border-2 border-white/20 bg-neutral-900 shadow-2xl shadow-orange-500/20">
+                            <Image
+                                src="/enclave-audit-frame.jpg"
+                                alt="AI Website Audit Preview"
+                                fill
+                                className="object-cover opacity-60"
+                            />
+                            {/* Overlay Gradient */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-neutral-950/90 via-neutral-950/40 to-transparent pointer-events-none z-10" />
+                            {/* Badge */}
+                            <div className="absolute bottom-4 left-4 right-4 z-20">
+                                <div className="flex items-center gap-2 bg-neutral-900/90 backdrop-blur-sm border border-white/10 rounded-xl px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                        <span className="relative flex h-2 w-2">
+                                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                                            <span className="relative inline-flex rounded-full h-2 w-2 bg-orange-500"></span>
+                                        </span>
+                                        <span className="text-white text-sm font-medium">AI-Powered Analysis</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Footer Links Section */}
+                <div className="mt-16 pt-12 border-t border-white/5">
+                    <div className="flex flex-col sm:flex-row gap-16 lg:gap-24">
                         <div className="flex flex-col gap-5">
                             <h3 className="text-white text-sm font-semibold">Services</h3>
                             <nav className="flex flex-col gap-3">
