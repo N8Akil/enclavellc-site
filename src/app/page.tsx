@@ -29,7 +29,7 @@ export default function HomePage() {
                 priority
               />
             </div>
-            <div className="hidden sm:flex flex-col leading-tight">
+            <div className="flex flex-col leading-tight">
               <span className="text-white text-sm font-semibold tracking-tight">Enclave Development</span>
               <span className="text-neutral-400 text-[10px]">Web & Automation</span>
             </div>

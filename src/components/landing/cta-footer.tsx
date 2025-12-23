@@ -1,9 +1,14 @@
 "use client"
 
+import { useState } from "react"
 import Image from "next/image"
 import { ContactForm } from "@/components/contact-form"
+import { WebsiteAuditForm } from "@/components/website-audit-form"
+import { Zap, MessageSquare } from "lucide-react"
 
 export function CTAFooter() {
+    const [activeTab, setActiveTab] = useState<'audit' | 'contact'>('audit')
+
     return (
         <footer id="contact" className="scroll-mt-24 overflow-hidden md:px-10 bg-neutral-950 w-full max-w-7xl border border-neutral-800 rounded-3xl mt-24 mx-auto mb-12 px-10 relative">
 
@@ -17,7 +22,7 @@ export function CTAFooter() {
             <div className="px-6 pt-16 pb-12 md:px-4 relative z-10 animate-on-scroll">
                 <div className="flex flex-col lg:flex-row justify-between gap-16 lg:gap-12">
 
-                    {/* Contact Form Column */}
+                    {/* Form Column */}
                     <div className="lg:w-1/2 max-w-2xl flex flex-col items-start justify-center">
                         <div className="flex items-center gap-4 mb-8 group">
                             <div className="relative w-14 h-14 opacity-70 group-hover:opacity-100 transition-all duration-500">
@@ -33,20 +38,61 @@ export function CTAFooter() {
                                 <span className="text-neutral-500 text-sm">Web & Automation Services</span>
                             </div>
                         </div>
-                        <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight mb-6 leading-[1.1]">
-                            <span className="text-neutral-500">Request a</span>
-                            <span className="text-white block">Free Audit</span>
-                        </h2>
-                        <p className="text-neutral-400 text-lg mb-8 max-w-md">
-                            Tell us what you need. We'll respond with next steps and a straightforward recommendation.
-                        </p>
+
+                        {/* Tab Switcher */}
+                        <div className="flex w-full bg-neutral-900/50 border border-white/10 rounded-xl p-1 mb-6">
+                            <button
+                                onClick={() => setActiveTab('audit')}
+                                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${activeTab === 'audit'
+                                    ? 'bg-orange-500 text-white'
+                                    : 'text-neutral-400 hover:text-white'
+                                    }`}
+                            >
+                                <Zap className="w-4 h-4" />
+                                Instant Audit
+                            </button>
+                            <button
+                                onClick={() => setActiveTab('contact')}
+                                className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg text-sm font-medium transition-all ${activeTab === 'contact'
+                                    ? 'bg-orange-500 text-white'
+                                    : 'text-neutral-400 hover:text-white'
+                                    }`}
+                            >
+                                <MessageSquare className="w-4 h-4" />
+                                Contact Us
+                            </button>
+                        </div>
+
+                        {activeTab === 'audit' ? (
+                            <>
+                                <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight mb-6 leading-[1.1]">
+                                    <span className="text-neutral-500">Instant</span>
+                                    <span className="text-white block">Website Audit</span>
+                                </h2>
+                                <p className="text-neutral-400 text-lg mb-8 max-w-md">
+                                    Enter your URL below and receive a <span className="text-white font-medium">professional audit document</span> in your inbox within minutes. AI-powered analysis, zero human delay.
+                                </p>
+                            </>
+                        ) : (
+                            <>
+                                <h2 className="text-3xl sm:text-4xl md:text-5xl font-medium tracking-tight mb-6 leading-[1.1]">
+                                    <span className="text-neutral-500">Let's</span>
+                                    <span className="text-white block">Talk</span>
+                                </h2>
+                                <p className="text-neutral-400 text-lg mb-8 max-w-md">
+                                    Tell us what you need. We'll respond with next steps and a straightforward recommendation.
+                                </p>
+                            </>
+                        )}
 
                         <div className="w-full bg-neutral-900/50 border border-white/10 rounded-2xl p-6">
-                            <ContactForm />
+                            {activeTab === 'audit' ? <WebsiteAuditForm /> : <ContactForm />}
                         </div>
 
                         <p className="mt-4 text-sm text-neutral-500">
-                            Response time: within 1 business day.
+                            {activeTab === 'audit'
+                                ? "📬 Professional .docx report delivered to your inbox in 2-3 minutes."
+                                : "Response time: within 1 business day."}
                         </p>
                     </div>
 

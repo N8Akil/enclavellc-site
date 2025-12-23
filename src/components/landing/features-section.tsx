@@ -30,29 +30,35 @@ export function FeaturesSection() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 z-10 mt-16 pt-0 relative gap-8">
 
                     {/* Service 1: Website Audit (FREE) */}
-                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
-                        <div className="absolute top-4 right-4 bg-neutral-500/20 text-neutral-400 text-xs font-bold px-2 py-1 rounded-full">
-                            FREE
+                    <a href="#contact" className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll hover:border-orange-500/30 cursor-pointer">
+                        <div className="absolute top-4 right-4 flex items-center gap-2">
+                            <span className="bg-emerald-500/20 text-emerald-400 text-xs font-bold px-2 py-1 rounded-full">
+                                INSTANT
+                            </span>
+                            <span className="bg-neutral-500/20 text-neutral-400 text-xs font-bold px-2 py-1 rounded-full">
+                                FREE
+                            </span>
                         </div>
-                        <div className="w-14 h-14 rounded-xl bg-neutral-500/10 flex items-center justify-center mb-6">
-                            <Search className="w-7 h-7 text-neutral-400" />
+                        <div className="w-14 h-14 rounded-xl bg-orange-500/10 flex items-center justify-center mb-6">
+                            <Search className="w-7 h-7 text-orange-500" />
                         </div>
                         <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Website Audit</h3>
-                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed">
+                        <ul className="space-y-2 text-[var(--color-text-secondary)] text-sm leading-relaxed mb-4">
                             <li className="flex items-start gap-2">
-                                <span className="text-neutral-400 mt-1">•</span>
-                                <span>Full site performance analysis</span>
+                                <span className="text-orange-500 mt-1">•</span>
+                                <span>AI-powered full site analysis</span>
                             </li>
                             <li className="flex items-start gap-2">
-                                <span className="text-neutral-400 mt-1">•</span>
-                                <span>Lead capture assessment</span>
+                                <span className="text-orange-500 mt-1">•</span>
+                                <span>Professional .docx report delivered</span>
                             </li>
                             <li className="flex items-start gap-2">
-                                <span className="text-neutral-400 mt-1">•</span>
-                                <span>Actionable recommendations</span>
+                                <span className="text-orange-500 mt-1">•</span>
+                                <span>In your inbox in 2-3 minutes</span>
                             </li>
                         </ul>
-                    </div>
+                        <span className="text-orange-500 text-sm font-medium group-hover:underline">Get Yours Now →</span>
+                    </a>
 
                     {/* Service 2: Content Creation ($999/mo) */}
                     <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
@@ -192,18 +198,19 @@ export function FeaturesSection() {
                 <div className="grid grid-cols-1 md:grid-cols-3 z-10 mt-16 pt-0 relative gap-8">
 
                     {/* Step 1: Audit */}
-                    <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">
+                    <a href="#contact" className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll hover:border-orange-500/30 cursor-pointer">
                         <div className="flex items-center gap-4 mb-4">
                             <div className="w-10 h-10 rounded-full bg-[var(--color-accent-orange)] flex items-center justify-center text-white font-bold">
                                 1
                             </div>
                             <ClipboardCheck className="w-6 h-6 text-[var(--color-accent-orange)]" />
                         </div>
-                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Audit</h3>
+                        <h3 className="text-xl font-semibold text-[var(--color-text-primary)] tracking-tight mb-3">Instant Audit</h3>
                         <p className="text-[var(--color-text-secondary)] text-sm leading-relaxed">
-                            We review your site and your lead process. You get a clear punch list of what needs to change.
+                            Enter your URL below and receive a professional audit document in your inbox within minutes. No calls, no waiting.
                         </p>
-                    </div>
+                        <span className="text-orange-500 text-sm font-medium mt-3 group-hover:underline">Get Free Audit →</span>
+                    </a>
 
                     {/* Step 2: Build */}
                     <div className="group glass-card flex flex-col transition-all duration-500 overflow-hidden h-auto rounded-2xl p-6 relative animate-on-scroll">

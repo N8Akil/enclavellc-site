@@ -7,6 +7,7 @@ import { ArrowRight, Check, Globe, Zap, FileText, Sparkles, ArrowLeft, Camera, S
 import { ThemeToggle } from "@/components/theme-toggle"
 
 const packages = [
+  // Ordered by price: Free → $999/mo → $1,299/mo → $1,499 → $2,499 → $3,499
   {
     id: "website-audit",
     name: "Website Audit",
@@ -20,59 +21,8 @@ const packages = [
       "Actionable recommendations",
     ],
     icon: FileText,
-    color: "orange",
+    color: "gray",
     popular: false,
-  },
-  {
-    id: "website-rebuild",
-    name: "Website Rebuild",
-    price: "$2,499",
-    description: "Modern, mobile-first website that converts visitors to customers",
-    features: [
-      "Custom responsive design",
-      "SEO optimization",
-      "Fast load times",
-      "Contact forms + lead capture",
-      "Google Analytics setup",
-      "2 rounds of revisions",
-    ],
-    icon: Globe,
-    color: "orange",
-    popular: false,
-  },
-  {
-    id: "automation-setup",
-    name: "Automation Setup",
-    price: "$1,499",
-    description: "Stop losing leads with automated follow-up systems",
-    features: [
-      "Form submission notifications",
-      "Email auto-responders",
-      "Calendar/scheduling integration",
-      "CRM connection (if applicable)",
-      "SMS follow-up (optional)",
-      "Training session included",
-    ],
-    icon: Zap,
-    color: "red",
-    popular: false,
-  },
-  {
-    id: "full-package",
-    name: "Full Digital Overhaul",
-    price: "$3,499",
-    description: "Everything you need to modernize your digital presence",
-    features: [
-      "Everything in Website Rebuild",
-      "Everything in Automation Setup",
-      "Professional copywriting",
-      "Brand refresh consultation",
-      "Priority support for 30 days",
-      "Quarterly check-in call",
-    ],
-    icon: Sparkles,
-    color: "yellow",
-    popular: true,
   },
   {
     id: "content-creation",
@@ -107,6 +57,57 @@ const packages = [
     icon: Share2,
     color: "blue",
     popular: false,
+  },
+  {
+    id: "automation-setup",
+    name: "Automation Setup",
+    price: "$1,499",
+    description: "Stop losing leads with automated follow-up systems",
+    features: [
+      "Form submission notifications",
+      "Email auto-responders",
+      "Calendar/scheduling integration",
+      "CRM connection (if applicable)",
+      "SMS follow-up (optional)",
+      "Training session included",
+    ],
+    icon: Zap,
+    color: "red",
+    popular: false,
+  },
+  {
+    id: "website-rebuild",
+    name: "Website Rebuild",
+    price: "$2,499",
+    description: "Modern, mobile-first website that converts visitors to customers",
+    features: [
+      "Custom responsive design",
+      "SEO optimization",
+      "Fast load times",
+      "Contact forms + lead capture",
+      "Google Analytics setup",
+      "2 rounds of revisions",
+    ],
+    icon: Globe,
+    color: "orange",
+    popular: false,
+  },
+  {
+    id: "full-package",
+    name: "Full Digital Overhaul",
+    price: "$3,499",
+    description: "Everything you need to modernize your digital presence",
+    features: [
+      "Everything in Website Rebuild",
+      "Everything in Automation Setup",
+      "Professional copywriting",
+      "Brand refresh consultation",
+      "Priority support for 30 days",
+      "Quarterly check-in call",
+    ],
+    icon: Sparkles,
+    color: "yellow",
+    popular: true,
   },
 ]
 
@@ -180,6 +181,13 @@ export default function PaymentPage() {
           text: "text-blue-500",
           border: "border-blue-500/20",
           button: "bg-blue-500 hover:bg-blue-600",
+        }
+      case "gray":
+        return {
+          bg: "bg-neutral-500/10",
+          text: "text-neutral-400",
+          border: "border-neutral-500/20",
+          button: "bg-neutral-500 hover:bg-neutral-600",
         }
       default:
         return {
