@@ -17,6 +17,9 @@ const auditRequestSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  // failure logs carry this id and a code, never the visitor's details
+  const requestId = crypto.randomUUID().slice(0, 8);
+
   try {
     // Parse request body
     const body = await request.json();
@@ -127,9 +130,12 @@ export async function POST(request: NextRequest) {
     });
 
     if (!emailResult.success) {
-      // the audit ran but did not reach the visitor: say so, and log only codes and an id
-      const requestId = crypto.randomUUID().slice(0, 8);
+      // log only codes and the request id
       console.error(`[Audit] ${requestId} email failed: ${emailResult.error}`);
+    }
+
+    if (!emailResult.userSent) {
+      // the audit ran but did not reach the visitor: say so
       return NextResponse.json(
         {
           success: false,
@@ -145,7 +151,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `Your audit is being generated! Check ${userEmail} in 2-3 minutes.`,
+      message: `Your audit has been emailed to ${userEmail}. Check your inbox in 2-3 minutes.`,
       estimatedTime: '2-3 minutes',
     });
 

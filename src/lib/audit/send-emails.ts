@@ -11,7 +11,14 @@ interface SendEmailsOptions {
   auditResults: AuditResults;
 }
 
-export async function sendAuditEmails(options: SendEmailsOptions): Promise<{ success: boolean; error?: string }> {
+export interface SendEmailsResult {
+  success: boolean;
+  userSent: boolean;
+  adminSent: boolean;
+  error?: string;
+}
+
+export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendEmailsResult> {
   const { document, userEmail, userName, adminEmail, websiteUrl, auditResults } = options;
 
   const documentBase64 = document.toString('base64');
@@ -30,18 +37,20 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<{ suc
   // The admin send is attempted even if the visitor's failed, so the lead still reaches the inbox.
   // Failures are reported as codes only: Resend's messages can echo the addresses.
   const failures: string[] = [];
-  const attempt = async (who: 'user' | 'admin', send: () => ReturnType<typeof client.emails.send>) => {
+  const attempt = async (who: 'user' | 'admin', send: () => ReturnType<typeof client.emails.send>): Promise<boolean> => {
     try {
       const { data, error } = await send();
       if (error) failures.push(`${who}: ${error.statusCode ?? '-'} ${error.name}`);
       else if (!data?.id) failures.push(`${who}: no id`);
+      else return true;
     } catch (error) {
       failures.push(`${who}: threw ${error instanceof Error ? error.name : typeof error}`);
     }
+    return false;
   };
 
   // Send to user
-  await attempt('user', () => client.emails.send({
+  const userSent = await attempt('user', () => client.emails.send({
     from: 'Enclave LLC <audits@enclavellc.net>',
     to: userEmail,
     subject: `Your Website Audit Report for ${websiteUrl} is Ready!`,
@@ -50,7 +59,7 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<{ suc
   }));
 
   // Send admin notification
-  await attempt('admin', () => client.emails.send({
+  const adminSent = await attempt('admin', () => client.emails.send({
     from: 'Enclave Audit System <audits@enclavellc.net>',
     to: adminEmail,
     subject: `New Audit Lead: ${websiteUrl}`,
@@ -58,7 +67,9 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<{ suc
     attachments
   }));
 
-  return failures.length ? { success: false, error: failures.join('; ') } : { success: true };
+  return failures.length
+    ? { success: false, userSent, adminSent, error: failures.join('; ') }
+    : { success: true, userSent, adminSent };
 }
 
 function generateUserEmailHtml(
