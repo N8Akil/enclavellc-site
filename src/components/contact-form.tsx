@@ -37,7 +37,9 @@ export function ContactForm() {
         })
 
         if (!res.ok) {
-            toast.error("Something failed. Try again or call/text us.")
+            // the API's own message carries the fallback address when a send fails
+            const data = await res.json().catch(() => null)
+            toast.error(typeof data?.error === "string" ? data.error : "Something failed. Please email n.garrett@enclavellc.net or try again.")
             return
         }
 
