@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { escapeHtml } from '@/lib/email/escape'
 import { getResendClient } from '@/lib/email/resend-client'
 
 /**
@@ -73,15 +74,6 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     )
   }
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
 }
 
 function enquiryHtml(fields: Record<string, unknown>): string {

@@ -1,4 +1,5 @@
 // src/lib/audit/send-emails.ts
+import { escapeHtml } from '@/lib/email/escape';
 import { getResendClient } from '@/lib/email/resend-client';
 import type { AuditResults } from './types';
 
@@ -19,7 +20,8 @@ export interface SendEmailsResult {
 }
 
 export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendEmailsResult> {
-  const { document, userEmail, userName, adminEmail, websiteUrl, auditResults } = options;
+  const { document, userEmail, adminEmail, websiteUrl, auditResults } = options;
+  const userName = options.userName?.slice(0, 100);
 
   const documentBase64 = document.toString('base64');
   const filename = `Website-Audit-${new URL(websiteUrl).hostname}-${new Date().toISOString().split('T')[0]}.docx`;
@@ -77,8 +79,11 @@ function generateUserEmailHtml(
   websiteUrl: string,
   auditResults: AuditResults
 ): string {
-  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i => i.title);
-  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s => s.title);
+  // everything below comes from the visitor or from their site: escape it
+  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i => escapeHtml(i.title));
+  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s => escapeHtml(s.title));
+  const name = escapeHtml(userName || 'there');
+  const site = escapeHtml(websiteUrl);
 
   return `
 <!DOCTYPE html>
@@ -115,10 +120,10 @@ function generateUserEmailHtml(
           <tr>
             <td style="padding: 20px 40px;">
               <p style="color: #333333; font-size: 16px; line-height: 1.6;">
-                Hi ${userName || 'there'},
+                Hi ${name},
               </p>
               <p style="color: #333333; font-size: 16px; line-height: 1.6;">
-                Great news! Your free website audit for <strong>${websiteUrl}</strong> is complete.
+                Great news! Your free website audit for <strong>${site}</strong> is complete.
               </p>
 
               ${topStrengths.length > 0 ? `
@@ -185,6 +190,11 @@ function generateAdminEmailHtml(
   const highest = sortedCategories[0];
   const lowest = sortedCategories[sortedCategories.length - 1];
 
+  // everything below comes from the visitor or from their site: escape it
+  const site = escapeHtml(websiteUrl);
+  const email = escapeHtml(userEmail);
+  const name = escapeHtml(userName || 'Not provided');
+
   return `
 <!DOCTYPE html>
 <html>
@@ -206,17 +216,17 @@ function generateAdminEmailHtml(
         <table role="presentation" style="width: 100%;">
           <tr>
             <td style="padding: 10px 0;">
-              <strong>Website:</strong> <a href="${websiteUrl}" style="color: #2874A6;">${websiteUrl}</a>
+              <strong>Website:</strong> <a href="${site}" style="color: #2874A6;">${site}</a>
             </td>
           </tr>
           <tr>
             <td style="padding: 10px 0;">
-              <strong>User Email:</strong> <a href="mailto:${userEmail}" style="color: #2874A6;">${userEmail}</a>
+              <strong>User Email:</strong> <a href="mailto:${email}" style="color: #2874A6;">${email}</a>
             </td>
           </tr>
           <tr>
             <td style="padding: 10px 0;">
-              <strong>User Name:</strong> ${userName || 'Not provided'}
+              <strong>User Name:</strong> ${name}
             </td>
           </tr>
           <tr>
@@ -238,8 +248,8 @@ function generateAdminEmailHtml(
 
         <h3 style="color: #333333; margin-bottom: 15px;">Quick Stats</h3>
         <ul style="color: #333333; font-size: 14px; line-height: 1.8; padding-left: 20px;">
-          <li><strong>Highest Score:</strong> ${highest?.name || 'N/A'} (${highest?.score || 'N/A'})</li>
-          <li><strong>Lowest Score:</strong> ${lowest?.name || 'N/A'} (${lowest?.score || 'N/A'})</li>
+          <li><strong>Highest Score:</strong> ${escapeHtml(highest?.name || 'N/A')} (${escapeHtml(highest?.score || 'N/A')})</li>
+          <li><strong>Lowest Score:</strong> ${escapeHtml(lowest?.name || 'N/A')} (${escapeHtml(lowest?.score || 'N/A')})</li>
           <li><strong>Critical Issues:</strong> ${criticalIssues.length}</li>
         </ul>
 
