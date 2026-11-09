@@ -29,7 +29,7 @@ const css = (o: Record<string, string | number>) => o as CSSProperties
 
 // the crew on risers, back to front; left/height place each cut-out on the stage, fx is its tape mark, tag nudges a label
 const risers = [
-  { who: 'amun', back: true, left: '18.9%', height: '72%', w: 658, h: 1152, alt: 'Amun, in a grey suit', fx: '52%', tag: '57%', dept: 'planning' },
+  { who: 'amun', back: true, left: '18.9%', height: '72%', w: 658, h: 1152, alt: 'Amun, in a grey suit', fx: '52%', tag: '57%', dept: 'production' },
   { who: 'ra', back: true, left: '59.3%', height: '72%', w: 786, h: 1181, alt: 'Ra, in an olive blazer', fx: '43%', dept: 'operations' },
   { who: 'thoth', left: '3%', height: '82%', w: 1221, h: 1099, alt: 'Thoth, seated, in a navy blazer', fx: '50.6%', tag: '27%', dept: 'engineering' },
   { who: 'horus', left: '73.3%', height: '82%', w: 734, h: 1166, alt: 'Horus, in a black blazer', fx: '44%', dept: 'content' },
