@@ -21,7 +21,7 @@ export const crew: CrewMember[] = [
   { id: 'ra', name: 'Ra', role: 'Operations', call: 'After hours too', line: 'Keeps everything fast, backed up and online.', does: ['Hosting, security and backups', 'Watching for problems before you do', 'Updates without the downtime'], demo: 'uptime', w: 786, h: 1181, fx: -0.008 },
   { id: 'horus', name: 'Horus', role: 'Content and social', call: 'On schedule', line: 'Keeps you visible with posts, videos and newsletters in your voice.', does: ['A posting calendar you approve', 'Short videos and graphics', 'Replies and simple monthly reporting'], demo: 'cal', w: 734, h: 1166, fx: -0.04 },
   { id: 'osiris', name: 'Osiris', role: 'Quality review', call: 'Before every release', line: 'Checks every page, link and word before anything reaches your customers.', does: ['Speed and accessibility checks', 'Every link and form tested', 'Copy read for clarity and accuracy'], demo: 'checks', w: 902, h: 1174, fx: -0.063 },
-  { id: 'amun', name: 'Amun', role: 'Planning [confirm]', call: 'At kickoff', line: 'Maps the work into a clear plan and one price, so there are no surprises.', does: ['A written plan with milestones', 'One quote, agreed up front', 'Progress you can see each week'], demo: 'gantt', w: 658, h: 1152, fx: 0.068 },
+  { id: 'amun', name: 'Amun', role: 'Production', call: 'At kickoff', line: 'Maps the work into a clear plan and one price, so there are no surprises.', does: ['A written plan with milestones', 'One quote, agreed up front', 'Progress you can see each week'], demo: 'gantt', w: 658, h: 1152, fx: 0.068 },
 ]
 
 export const crewSrc = (id: string) => `/night/crew/${id}.webp`

@@ -229,7 +229,7 @@ export default function NightPage() {
               <div className="wrap roll" id="roll">
                 <div className="grp"><span className="k mono">Directed by</span><span className="v">Nate Garrett</span></div>
                 <div className="grp"><span className="k mono">Starring</span>
-                  <div className="cast"><span>Design and build</span><span>Isis</span><span>Engineering</span><span>Thoth</span><span>Operations</span><span>Ra</span><span>Content and social</span><span>Horus</span><span>Quality review</span><span>Osiris</span><span>Planning</span><span>Amun</span><span>Coming soon</span><span>Naunet</span><span>Coming soon</span><span>Amaunet</span></div>
+                  <div className="cast"><span>Design and build</span><span>Isis</span><span>Engineering</span><span>Thoth</span><span>Operations</span><span>Ra</span><span>Content and social</span><span>Horus</span><span>Quality review</span><span>Osiris</span><span>Production</span><span>Amun</span><span>Coming soon</span><span>Naunet</span><span>Coming soon</span><span>Amaunet</span></div>
                 </div>
                 <div className="grp"><span className="k mono">And introducing</span><span className="v" style={{ color: 'var(--gold-ink)' }}>Your business</span></div>
               </div>
