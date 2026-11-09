@@ -91,7 +91,7 @@ export function NightAuditForm() {
 // ---------------------------------------------------------------------------------------------------------------
 // "Book a call". There is no booking link yet, so the button opens a contact form. It mirrors
 // src/components/contact-form.tsx: the same schema and default, the same POST of the raw values to /api/contact,
-// and the same success (res.ok) and failure messages.
+// the same success (res.ok) message, and on failure the API's own error (or the same fallback address).
 // ---------------------------------------------------------------------------------------------------------------
 const contactSchema = z.object({
   name: z.string().min(2, 'Please enter your name.'),
@@ -125,15 +125,17 @@ export function NightBook() {
       })
 
       if (!res.ok) {
-        setResult({ ok: false, text: 'Something failed. Try again or call/text us.' })
+        // the API's own error carries the fallback address (enclavellc-site #3)
+        const data = await res.json().catch(() => null)
+        setResult({ ok: false, text: typeof data?.error === 'string' ? data.error : 'We could not send your message. Please email n.garrett@enclavellc.net or try again.' })
         return
       }
 
       setResult({ ok: true, text: 'Sent. We’ll get back to you ASAP.' })
       reset()
     } catch {
-      // the original lets a network error escape; here it lands on the same failure line
-      setResult({ ok: false, text: 'Something failed. Try again or call/text us.' })
+      // a network error: the same fallback contact-form.tsx shows (enclavellc-site #3, fold 6)
+      setResult({ ok: false, text: 'We could not send your message. Please email n.garrett@enclavellc.net or try again.' })
     }
   }
 

@@ -9,8 +9,9 @@ base="${1:?usage: $0 <base-ref>}"
 protected=(
   src/app/api/payment/            # Stripe checkout + webhook
   src/app/api/audit/              # audit endpoint (AI call + email)
-  src/app/api/contact/            # contact endpoint (n8n webhook)
+  src/app/api/contact/            # contact endpoint (Resend, enclavellc-site #3)
   src/lib/audit/                  # audit pipeline
+  src/lib/email/                  # shared Resend client + escapeHtml (enclavellc-site #3)
   # found by grepping src/ for `new Stripe(`, `@anthropic-ai/sdk`, `resend`, `Resend(`:
   src/app/api/payment/create-checkout/route.ts   # new Stripe(
   src/app/api/payment/webhook/route.ts           # new Stripe(
