@@ -1,16 +1,6 @@
 // src/lib/audit/send-emails.ts
-import { Resend } from 'resend';
+import { getResendClient } from '@/lib/email/resend-client';
 import type { AuditResults } from './types';
-
-// Lazy initialization to prevent build-time errors
-let resend: Resend | null = null;
-
-function getResendClient(): Resend {
-  if (!resend) {
-    resend = new Resend(process.env.RESEND_API_KEY);
-  }
-  return resend;
-}
 
 interface SendEmailsOptions {
   document: Buffer;
@@ -27,47 +17,48 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<{ suc
   const documentBase64 = document.toString('base64');
   const filename = `Website-Audit-${new URL(websiteUrl).hostname}-${new Date().toISOString().split('T')[0]}.docx`;
 
-  try {
-    const client = getResendClient();
+  const client = getResendClient();
+  const attachments = [
+    {
+      filename,
+      content: documentBase64,
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    }
+  ];
 
-    // Send to user
-    await client.emails.send({
-      from: 'Enclave LLC <audits@enclavellc.net>',
-      to: userEmail,
-      subject: `Your Website Audit Report for ${websiteUrl} is Ready!`,
-      html: generateUserEmailHtml(userName, websiteUrl, auditResults),
-      attachments: [
-        {
-          filename,
-          content: documentBase64,
-          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        }
-      ]
-    });
+  // Resend returns { data, error } instead of throwing on API errors, so both results are checked.
+  // The admin send is attempted even if the visitor's failed, so the lead still reaches the inbox.
+  // Failures are reported as codes only: Resend's messages can echo the addresses.
+  const failures: string[] = [];
+  const attempt = async (who: 'user' | 'admin', send: () => ReturnType<typeof client.emails.send>) => {
+    try {
+      const { data, error } = await send();
+      if (error) failures.push(`${who}: ${error.statusCode ?? '-'} ${error.name}`);
+      else if (!data?.id) failures.push(`${who}: no id`);
+    } catch (error) {
+      failures.push(`${who}: threw ${error instanceof Error ? error.name : typeof error}`);
+    }
+  };
 
-    // Send admin notification
-    await client.emails.send({
-      from: 'Enclave Audit System <audits@enclavellc.net>',
-      to: adminEmail,
-      subject: `New Audit Lead: ${websiteUrl}`,
-      html: generateAdminEmailHtml(userEmail, userName, websiteUrl, auditResults),
-      attachments: [
-        {
-          filename,
-          content: documentBase64,
-          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        }
-      ]
-    });
+  // Send to user
+  await attempt('user', () => client.emails.send({
+    from: 'Enclave LLC <audits@enclavellc.net>',
+    to: userEmail,
+    subject: `Your Website Audit Report for ${websiteUrl} is Ready!`,
+    html: generateUserEmailHtml(userName, websiteUrl, auditResults),
+    attachments
+  }));
 
-    return { success: true };
-  } catch (error) {
-    console.error('Email sending error:', error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to send emails'
-    };
-  }
+  // Send admin notification
+  await attempt('admin', () => client.emails.send({
+    from: 'Enclave Audit System <audits@enclavellc.net>',
+    to: adminEmail,
+    subject: `New Audit Lead: ${websiteUrl}`,
+    html: generateAdminEmailHtml(userEmail, userName, websiteUrl, auditResults),
+    attachments
+  }));
+
+  return failures.length ? { success: false, error: failures.join('; ') } : { success: true };
 }
 
 function generateUserEmailHtml(

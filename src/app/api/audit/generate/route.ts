@@ -127,9 +127,18 @@ export async function POST(request: NextRequest) {
     });
 
     if (!emailResult.success) {
-      console.error('Email sending failed:', emailResult.error);
-      // Still return success to user since audit was generated
-      // They can contact support if they don't receive the email
+      // the audit ran but did not reach the visitor: say so, and log only codes and an id
+      const requestId = crypto.randomUUID().slice(0, 8);
+      console.error(`[Audit] ${requestId} email failed: ${emailResult.error}`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'EMAIL_FAILED',
+          message: 'Your audit ran but we could not email it. Please contact n.garrett@enclavellc.net.',
+          requestId,
+        },
+        { status: 502 }
+      );
     }
 
     console.log(`[Audit] Completed successfully for ${websiteUrl}`);
