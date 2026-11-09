@@ -56,24 +56,26 @@ export async function POST(request: NextRequest) {
 
     // Check for required environment variables
     if (!process.env.ANTHROPIC_API_KEY) {
-      console.error('Missing ANTHROPIC_API_KEY');
+      console.error(`[Audit] ${requestId} config missing: ANTHROPIC_API_KEY`);
       return NextResponse.json(
         {
           success: false,
           error: 'CONFIG_ERROR',
-          message: 'Service temporarily unavailable. Please try again later.',
+          message: 'Service temporarily unavailable. Please contact n.garrett@enclavellc.net or try again later.',
+          requestId,
         },
         { status: 500 }
       );
     }
 
     if (!process.env.RESEND_API_KEY) {
-      console.error('Missing RESEND_API_KEY');
+      console.error(`[Audit] ${requestId} config missing: RESEND_API_KEY`);
       return NextResponse.json(
         {
           success: false,
           error: 'CONFIG_ERROR',
-          message: 'Service temporarily unavailable. Please try again later.',
+          message: 'Service temporarily unavailable. Please contact n.garrett@enclavellc.net or try again later.',
+          requestId,
         },
         { status: 500 }
       );
