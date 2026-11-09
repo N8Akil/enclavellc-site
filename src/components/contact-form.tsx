@@ -30,14 +30,23 @@ export function ContactForm() {
     })
 
     const onSubmit = async (values: FormValues) => {
-        const res = await fetch("/api/contact", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(values),
-        })
+        let res: Response
+        try {
+            res = await fetch("/api/contact", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(values),
+            })
+        } catch {
+            // offline or the request never reached us
+            toast.error("We could not send your message. Please email n.garrett@enclavellc.net or try again.")
+            return
+        }
 
         if (!res.ok) {
-            toast.error("Something failed. Try again or call/text us.")
+            // the API's own message carries the fallback address when a send fails
+            const data = await res.json().catch(() => null)
+            toast.error(typeof data?.error === "string" ? data.error : "Something failed. Please email n.garrett@enclavellc.net or try again.")
             return
         }
 

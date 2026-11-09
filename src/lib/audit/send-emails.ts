@@ -1,16 +1,7 @@
 // src/lib/audit/send-emails.ts
-import { Resend } from 'resend';
+import { escapeHtml } from '@/lib/email/escape';
+import { getResendClient } from '@/lib/email/resend-client';
 import type { AuditResults } from './types';
-
-// Lazy initialization to prevent build-time errors
-let resend: Resend | null = null;
-
-function getResendClient(): Resend {
-  if (!resend) {
-    resend = new Resend(process.env.RESEND_API_KEY);
-  }
-  return resend;
-}
 
 interface SendEmailsOptions {
   document: Buffer;
@@ -21,53 +12,66 @@ interface SendEmailsOptions {
   auditResults: AuditResults;
 }
 
-export async function sendAuditEmails(options: SendEmailsOptions): Promise<{ success: boolean; error?: string }> {
-  const { document, userEmail, userName, adminEmail, websiteUrl, auditResults } = options;
+export interface SendEmailsResult {
+  success: boolean;
+  userSent: boolean;
+  adminSent: boolean;
+  error?: string;
+}
+
+export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendEmailsResult> {
+  const { document, userEmail, adminEmail, websiteUrl, auditResults } = options;
+  const userName = options.userName?.slice(0, 100);
 
   const documentBase64 = document.toString('base64');
   const filename = `Website-Audit-${new URL(websiteUrl).hostname}-${new Date().toISOString().split('T')[0]}.docx`;
 
-  try {
-    const client = getResendClient();
+  const client = getResendClient();
+  const attachments = [
+    {
+      filename,
+      content: documentBase64,
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    }
+  ];
 
-    // Send to user
-    await client.emails.send({
-      from: 'Enclave LLC <audits@enclavellc.net>',
-      to: userEmail,
-      subject: `Your Website Audit Report for ${websiteUrl} is Ready!`,
-      html: generateUserEmailHtml(userName, websiteUrl, auditResults),
-      attachments: [
-        {
-          filename,
-          content: documentBase64,
-          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        }
-      ]
-    });
+  // Resend returns { data, error } instead of throwing on API errors, so both results are checked.
+  // The admin send is attempted even if the visitor's failed, so the lead still reaches the inbox.
+  // Failures are reported as codes only: Resend's messages can echo the addresses.
+  const failures: string[] = [];
+  const attempt = async (who: 'user' | 'admin', send: () => ReturnType<typeof client.emails.send>): Promise<boolean> => {
+    try {
+      const { data, error } = await send();
+      if (error) failures.push(`${who}: ${error.statusCode ?? '-'} ${error.name}`);
+      else if (!data?.id) failures.push(`${who}: no id`);
+      else return true;
+    } catch (error) {
+      failures.push(`${who}: threw ${error instanceof Error ? error.name : typeof error}`);
+    }
+    return false;
+  };
 
-    // Send admin notification
-    await client.emails.send({
-      from: 'Enclave Audit System <audits@enclavellc.net>',
-      to: adminEmail,
-      subject: `New Audit Lead: ${websiteUrl}`,
-      html: generateAdminEmailHtml(userEmail, userName, websiteUrl, auditResults),
-      attachments: [
-        {
-          filename,
-          content: documentBase64,
-          contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        }
-      ]
-    });
+  // Send to user
+  const userSent = await attempt('user', () => client.emails.send({
+    from: 'Enclave LLC <audits@enclavellc.net>',
+    to: userEmail,
+    subject: `Your Website Audit Report for ${websiteUrl} is Ready!`,
+    html: generateUserEmailHtml(userName, websiteUrl, auditResults),
+    attachments
+  }));
 
-    return { success: true };
-  } catch (error) {
-    console.error('Email sending error:', error);
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : 'Failed to send emails'
-    };
-  }
+  // Send admin notification
+  const adminSent = await attempt('admin', () => client.emails.send({
+    from: 'Enclave Audit System <audits@enclavellc.net>',
+    to: adminEmail,
+    subject: `New Audit Lead: ${websiteUrl}`,
+    html: generateAdminEmailHtml(userEmail, userName, websiteUrl, auditResults),
+    attachments
+  }));
+
+  return failures.length
+    ? { success: false, userSent, adminSent, error: failures.join('; ') }
+    : { success: true, userSent, adminSent };
 }
 
 function generateUserEmailHtml(
@@ -75,8 +79,11 @@ function generateUserEmailHtml(
   websiteUrl: string,
   auditResults: AuditResults
 ): string {
-  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i => i.title);
-  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s => s.title);
+  // everything below comes from the visitor or from their site: escape it
+  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i => escapeHtml(i.title));
+  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s => escapeHtml(s.title));
+  const name = escapeHtml(userName || 'there');
+  const site = escapeHtml(websiteUrl);
 
   return `
 <!DOCTYPE html>
@@ -113,10 +120,10 @@ function generateUserEmailHtml(
           <tr>
             <td style="padding: 20px 40px;">
               <p style="color: #333333; font-size: 16px; line-height: 1.6;">
-                Hi ${userName || 'there'},
+                Hi ${name},
               </p>
               <p style="color: #333333; font-size: 16px; line-height: 1.6;">
-                Great news! Your free website audit for <strong>${websiteUrl}</strong> is complete.
+                Great news! Your free website audit for <strong>${site}</strong> is complete.
               </p>
 
               ${topStrengths.length > 0 ? `
@@ -183,6 +190,11 @@ function generateAdminEmailHtml(
   const highest = sortedCategories[0];
   const lowest = sortedCategories[sortedCategories.length - 1];
 
+  // everything below comes from the visitor or from their site: escape it
+  const site = escapeHtml(websiteUrl);
+  const email = escapeHtml(userEmail);
+  const name = escapeHtml(userName || 'Not provided');
+
   return `
 <!DOCTYPE html>
 <html>
@@ -204,17 +216,17 @@ function generateAdminEmailHtml(
         <table role="presentation" style="width: 100%;">
           <tr>
             <td style="padding: 10px 0;">
-              <strong>Website:</strong> <a href="${websiteUrl}" style="color: #2874A6;">${websiteUrl}</a>
+              <strong>Website:</strong> <a href="${site}" style="color: #2874A6;">${site}</a>
             </td>
           </tr>
           <tr>
             <td style="padding: 10px 0;">
-              <strong>User Email:</strong> <a href="mailto:${userEmail}" style="color: #2874A6;">${userEmail}</a>
+              <strong>User Email:</strong> <a href="mailto:${email}" style="color: #2874A6;">${email}</a>
             </td>
           </tr>
           <tr>
             <td style="padding: 10px 0;">
-              <strong>User Name:</strong> ${userName || 'Not provided'}
+              <strong>User Name:</strong> ${name}
             </td>
           </tr>
           <tr>
@@ -236,8 +248,8 @@ function generateAdminEmailHtml(
 
         <h3 style="color: #333333; margin-bottom: 15px;">Quick Stats</h3>
         <ul style="color: #333333; font-size: 14px; line-height: 1.8; padding-left: 20px;">
-          <li><strong>Highest Score:</strong> ${highest?.name || 'N/A'} (${highest?.score || 'N/A'})</li>
-          <li><strong>Lowest Score:</strong> ${lowest?.name || 'N/A'} (${lowest?.score || 'N/A'})</li>
+          <li><strong>Highest Score:</strong> ${escapeHtml(highest?.name || 'N/A')} (${escapeHtml(highest?.score || 'N/A')})</li>
+          <li><strong>Lowest Score:</strong> ${escapeHtml(lowest?.name || 'N/A')} (${escapeHtml(lowest?.score || 'N/A')})</li>
           <li><strong>Critical Issues:</strong> ${criticalIssues.length}</li>
         </ul>
 
