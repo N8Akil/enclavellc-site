@@ -119,9 +119,20 @@ describe('POST /api/contact', () => {
     expectNoPii(logs)
   })
 
-  it('no file under src references the retired n8n webhook', () => {
+  // fold 5: any mention of n8n in any case, not only the env var's literal name
+  const mentionsN8n = (text: string) => /n8n/i.test(text) || /N8N_WEBHOOK/.test(text)
+
+  it('[fold 5] the n8n matcher catches prose, code and the env var name', () => {
+    expect(mentionsN8n('Sends form data to n8n webhook for processing')).toBe(true)
+    expect(mentionsN8n("console.error('[Contact API] N8n failed')")).toBe(true)
+    expect(mentionsN8n('const url = process.env.N8N_WEBHOOK_URL')).toBe(true)
+    expect(mentionsN8n('Emails the enquiry through Resend')).toBe(false)
+  })
+
+  it('[fold 5] no file under src mentions the retired n8n webhook', () => {
+    const root = process.env.N8N_SCAN_ROOT || path.resolve(__dirname, '../src')
     const walk = (dir: string): string[] => readdirSync(dir).flatMap((f) => { const p = path.join(dir, f); return statSync(p).isDirectory() ? walk(p) : [p] })
-    const hits = walk(path.resolve(__dirname, '../src')).filter((f) => readFileSync(f, 'utf8').includes('N8N_WEBHOOK'))
+    const hits = walk(root).filter((f) => mentionsN8n(readFileSync(f, 'utf8'))).map((f) => path.relative(root, f))
     expect(hits).toEqual([])
   })
 })

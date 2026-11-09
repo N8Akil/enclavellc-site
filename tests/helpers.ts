@@ -36,8 +36,8 @@ export function loggedText(...spies: MockInstance[]): string {
   return spies.flatMap((s) => s.mock.calls.map((args) => args.map((a) => (typeof a === 'string' ? a : inspect(a, { depth: 5 }))).join(' '))).join('\n')
 }
 
-export function expectNoPii(logs: ReturnType<typeof spyLogs>) {
-  const text = loggedText(logs.error, logs.warn)
+export function expectNoPii(logs: ReturnType<typeof spyLogs>, opts: { includeLog?: boolean } = {}) {
+  const text = loggedText(logs.error, logs.warn, ...(opts.includeLog ? [logs.log] : []))
   for (const needle of PII) expect(text, `log leaked "${needle}"`).not.toContain(needle)
 }
 
