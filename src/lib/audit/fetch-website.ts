@@ -222,7 +222,8 @@ function normalizeUrl(url: string): string {
   }
 }
 
-export function validateUrl(url: string): { valid: boolean; error?: string } {
+// On success, `url` is the normalised URL the rest of the pipeline should use.
+export function validateUrl(url: string): { valid: boolean; error?: string; url?: string } {
   try {
     const normalized = normalizeUrl(url);
     const parsed = new URL(normalized);
@@ -236,7 +237,7 @@ export function validateUrl(url: string): { valid: boolean; error?: string } {
       return { valid: false, error: 'URL must include a valid domain' };
     }
 
-    return { valid: true };
+    return { valid: true, url: normalized };
   } catch {
     return { valid: false, error: 'Invalid URL format' };
   }

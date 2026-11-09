@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
 
     // Validate URL format
     const urlValidation = validateUrl(websiteUrl);
-    if (!urlValidation.valid) {
+    if (!urlValidation.valid || !urlValidation.url) {
       return NextResponse.json(
         {
           success: false,
@@ -51,6 +51,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    // from here on only the server's normalised URL is used, and it is never logged
+    const siteUrl = urlValidation.url;
 
     // Check for required environment variables
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -78,12 +80,12 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 1: Fetch website content
-    console.log(`[Audit] Fetching content from ${websiteUrl}`);
+    console.log(`[Audit] ${requestId} fetching site`);
     let websiteContent;
     try {
-      websiteContent = await fetchWebsiteContent(websiteUrl);
+      websiteContent = await fetchWebsiteContent(siteUrl);
     } catch (fetchError) {
-      console.error('Website fetch error:', fetchError);
+      console.error(`[Audit] ${requestId} fetch failed: ${errorCode(fetchError)}`);
       return NextResponse.json(
         {
           success: false,
@@ -95,8 +97,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 2: Run AI audit
-    console.log(`[Audit] Running AI analysis for ${websiteUrl}`);
-    const auditResult = await runAudit(websiteContent, websiteUrl, {
+    console.log(`[Audit] ${requestId} running analysis`);
+    const auditResult = await runAudit(websiteContent, siteUrl, {
       businessType,
       priorityAreas,
     });
@@ -113,11 +115,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 3: Generate document
-    console.log(`[Audit] Generating document for ${websiteUrl}`);
+    console.log(`[Audit] ${requestId} generating document`);
     const document = await generateAuditDocument(auditResult as AuditResults, { userName });
 
     // Step 4: Send emails
-    console.log(`[Audit] Sending emails for ${websiteUrl}`);
+    console.log(`[Audit] ${requestId} sending emails`);
     const adminEmail = process.env.ADMIN_EMAIL || 'n.garrett@enclavellc.net';
 
     const emailResult = await sendAuditEmails({
@@ -125,7 +127,7 @@ export async function POST(request: NextRequest) {
       userEmail,
       userName,
       adminEmail,
-      websiteUrl,
+      websiteUrl: siteUrl,
       auditResults: auditResult as AuditResults,
     });
 
@@ -147,7 +149,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[Audit] Completed successfully for ${websiteUrl}`);
+    console.log(`[Audit] ${requestId} completed`);
 
     return NextResponse.json({
       success: true,
@@ -156,16 +158,24 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Audit API error:', error);
+    console.error(`[Audit] ${requestId} error: ${errorCode(error)}`);
     return NextResponse.json(
       {
         success: false,
         error: 'SERVER_ERROR',
         message: 'An unexpected error occurred. Please try again later.',
+        requestId,
       },
       { status: 500 }
     );
   }
+}
+
+// An error's class name and code (e.g. "TypeError ERR_INVALID_URL"), never its message, which can carry the URL or address
+function errorCode(error: unknown): string {
+  if (!(error instanceof Error)) return typeof error;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? `${error.name} ${code}` : error.name;
 }
 
 // Health check endpoint
