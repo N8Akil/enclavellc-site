@@ -12,7 +12,7 @@ import './night.css'
 // Preview of the new home page (concept D · Night Crew). Not linked from anywhere and kept out of search.
 export const metadata: Metadata = {
   title: 'Night Crew preview',
-  description: 'Your website, your follow-up and your content keep working after you close. One founder, eight AI partners, one studio.',
+  description: 'Your website, your follow-up and your content keep working after you close. One founder, six AI partners, one studio.',
   robots: { index: false, follow: false },
 }
 
@@ -84,7 +84,7 @@ export default function NightPage() {
                 <h1 className="h1" id="h1">The crew works the <span>night shift.</span></h1>
               </div>
               <div>
-                <p className="sub">Your website, your follow-up and your content keep working after you close. One founder, eight AI partners, one studio.</p>
+                <p className="sub">Your website, your follow-up and your content keep working after you close. One founder, six AI partners, one studio.</p>
                 <div className="row"><a className="btn gold" href="#audit">Get a free site audit</a><a className="btn" href="#crew">Meet the crew</a></div>
               </div>
             </div>
@@ -164,8 +164,8 @@ export default function NightPage() {
                 <thead><tr><th scope="col">Crew</th><th scope="col">Department</th><th scope="col">Call time</th><th scope="col">Handles</th></tr></thead>
                 <tbody>
                   <tr className="founder-row"><td>Nate</td><td>Director</td><td><span className="call">Your hours</span></td><td>Every call with you, every decision, final approval. You always talk to a person.</td></tr>
-                  <tr><td>Isis</td><td>Art department</td><td><span className="call">Always on</span></td><td>Design and build: sites, native iPhone apps, brand, and pages that turn visitors into calls.</td></tr>
-                  <tr><td>Thoth</td><td>Engineering</td><td><span className="call">Always on</span></td><td>Forms, bookings, follow-up and the connections between your tools.</td></tr>
+                  <tr><td>Isis</td><td>Art department</td><td><span className="call">After hours too</span></td><td>Design and build: sites, native iPhone apps, brand, and pages that turn visitors into calls.</td></tr>
+                  <tr><td>Thoth</td><td>Engineering</td><td><span className="call">After hours too</span></td><td>Forms, bookings, follow-up and the connections between your tools.</td></tr>
                   <tr><td>Ra</td><td>Operations</td><td><span className="call">After hours too</span></td><td>Hosting, security, backups and keeping everything online.</td></tr>
                   <tr><td>Horus</td><td>Publicity</td><td><span className="call">On schedule</span></td><td>Posts, short videos, newsletters and replies in your voice.</td></tr>
                   <tr><td>Osiris</td><td>Continuity</td><td><span className="call">Before every release</span></td><td>Checks every page, link and word before your customers see it.</td></tr>
