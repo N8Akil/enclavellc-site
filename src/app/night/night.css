@@ -334,10 +334,6 @@ html:has(.nc) body{background:transparent}
 .nc .grain{position:fixed;inset:-8%;z-index:60;pointer-events:none;opacity:var(--grain-o);mix-blend-mode:var(--grain-blend);background-image:var(--grain);animation:nc-grain .9s steps(6) infinite}
 @keyframes nc-grain{0%{transform:translate(0,0)}20%{transform:translate(-3%,2%)}40%{transform:translate(2%,-3%)}60%{transform:translate(-2%,-2%)}80%{transform:translate(3%,1%)}100%{transform:translate(0,0)}}
 
-/* "Big Shoulders Display" is the display end of Big Shoulders' opsz axis; pin it wherever the display face is set
-   (one rule after every font shorthand, since the shorthand resets font-variation-settings) */
-.nc :is(h1,h2,h3,.brand,.signoff .v,.stamp,.names button,td:first-child,.slot strong,.roll .v,.roll .cast span:nth-child(even)){font-variation-settings:"opsz" 72}
-
 /* reveals move, never hide */
 .nc .rv{transition:transform .7s var(--ease)}
 .nc.js .rv:not(.in){transform:translateY(18px)}

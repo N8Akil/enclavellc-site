@@ -2,7 +2,8 @@
 import type { CSSProperties } from 'react'
 import type { Metadata } from 'next'
 import { preload } from 'react-dom'
-import { Big_Shoulders, IBM_Plex_Mono, Instrument_Sans } from 'next/font/google'
+import { IBM_Plex_Mono, Instrument_Sans } from 'next/font/google'
+import localFont from 'next/font/local'
 import { crew, crewSrc, mobileCardFrame, pad } from './crew'
 import { NightCrewMotion } from './night-crew-motion'
 import { NightAuditForm, NightBook } from './night-forms'
@@ -15,8 +16,9 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 }
 
-// Google now serves "Big Shoulders Display" as the opsz axis of Big Shoulders; night.css pins it to the display end.
-const display = Big_Shoulders({ subsets: ['latin'], axes: ['opsz'], variable: '--nc-font-display', display: 'swap', adjustFontFallback: false })
+// The concept's "Big Shoulders Display" (Google's legacy wght-only variable cut, latin subset), self-hosted: next/font/google
+// only offers its successor "Big Shoulders", whose bold runs ~6% wider and re-wraps the headings.
+const display = localFont({ src: './fonts/big-shoulders-display-latin.woff2', weight: '100 900', variable: '--nc-font-display', display: 'swap', fallback: ['Impact', 'Arial Narrow', 'sans-serif'] })
 const body = Instrument_Sans({ subsets: ['latin'], weight: ['400', '500', '600'], variable: '--nc-font-body', display: 'swap' })
 const mono = IBM_Plex_Mono({ subsets: ['latin'], weight: ['400', '500'], variable: '--nc-font-mono', display: 'swap' })
 
