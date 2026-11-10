@@ -38,6 +38,8 @@ export function pagePath(pageUrl: string): string {
 }
 
 // On /about: “the words quoted”      or      Looked for: a meta description, not found on /about
+// The "Looked for" line is only ever built from a fact the code computed (run-audit.ts turns a fact id into
+// `absent`); the model cannot write one.
 export function evidenceLine(evidence: Evidence): string {
   if ('quote' in evidence) return `On ${pagePath(evidence.pageUrl)}: “${evidence.quote}”`;
   const where = evidence.siteWide ? 'any page read' : pagePath(evidence.pageUrl);
@@ -51,8 +53,10 @@ export function howMadeText(results: AuditResults): string {
   const notCovered = UNASSESSED_CATEGORIES.join(', ');
   return (
     `This report was produced automatically. Our software read the text of ${pages} public ${pages === 1 ? 'page' : 'pages'} of your site, ` +
-    'and an AI model wrote the findings from that text. Each finding shows the words it rests on or what was looked for, ' +
-    'and our software removed any finding whose quoted words it could not find on the page. ' +
+    'and an AI model wrote the findings from that text. Each finding, strength and priority issue shows the words from your page that it rests on, ' +
+    'or what our software looked for in the page and did not find, so you can check it yourself. ' +
+    'Our software removed any finding whose quoted words it could not find on the page. ' +
+    'Text the page hides in its own markup is not read. ' +
     `The score covers ${areasReadPhrase(results)} only. ` +
     `It does not cover ${notCovered}: those need the page rendered in a browser, which the full review includes. ` +
     'It does not compare your site with competitors, and no person has reviewed it.'

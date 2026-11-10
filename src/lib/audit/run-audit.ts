@@ -1,9 +1,11 @@
 // src/lib/audit/run-audit.ts
 // The model call, and everything that keeps its answer honest:
-//   - the site's text goes in as delimited, untrusted DATA (the delimiters are stripped from the text first);
+//   - the site's text goes in as delimited, untrusted DATA. The delimiters carry a random code made for this one
+//     request, so no page can write them; anything that looks like one is stripped from the text all the same;
 //   - the answer must be ONE tool call, validated with zod; one retry on a miss, then an honest failure;
-//   - every quote is checked against the text that was actually sent, and unsupported findings are dropped;
+//   - every quote is checked against the page's own words, and unsupported findings are dropped;
 //   - the overall score and every status label are computed here, never by the model.
+import { randomBytes } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import auditConfig from '../../../docs/audit-system/audit-system-config.json';
@@ -28,16 +30,30 @@ import type {
   Evidence,
   FetchedPage,
   Finding,
+  Strength,
   WebsiteContent,
 } from './types';
 
-// The one copy of the prompt lives in the JSON config.
-export const SYSTEM_PROMPT: string = auditConfig.system_prompt;
+// The one copy of the prompt lives in the JSON config. It is a TEMPLATE: {{NONCE}} becomes this request's code.
+export const SYSTEM_PROMPT_TEMPLATE: string = auditConfig.system_prompt;
+export const NONCE_PLACEHOLDER = '{{NONCE}}';
 
-export const BLOCK_OPEN = '<<<UNTRUSTED_PAGE_CONTENT';
-export const BLOCK_CLOSE = '<<<END_UNTRUSTED_PAGE_CONTENT>>>';
 export const TOOL_NAME = 'submit_audit';
 export const MAX_QUOTE_LENGTH = 200;
+export const MIN_QUOTE_LENGTH = 20;
+export const MIN_QUOTE_WORDS = 4;
+
+// The data-block markers. The fixed word is public (it is in the repo); the code after it is 16 random bytes made
+// for one request, so a page cannot write a marker that matches.
+const DELIMITER_WORD = 'UNTRUSTED_PAGE_CONTENT';
+export const newNonce = (): string => randomBytes(16).toString('hex');
+export const blockOpen = (nonce: string): string => `<<<${DELIMITER_WORD}_${nonce}`;
+export const blockClose = (nonce: string): string => `<<<END_${DELIMITER_WORD}_${nonce}>>>`;
+
+export function renderSystemPrompt(nonce: string): string {
+  if (!/^[0-9a-f]{32,}$/.test(nonce)) throw new Error('bad nonce');
+  return SYSTEM_PROMPT_TEMPLATE.split(NONCE_PLACEHOLDER).join(nonce);
+}
 
 // The slice of the SDK this module uses; tests pass a stand-in so no request is ever made.
 export interface AuditModelClient {
@@ -88,19 +104,34 @@ function siteFactIds(pages: FetchedPage[]): SiteFactId[] {
   return ids;
 }
 
-// Topics the facts cover. A free-form "absent" claim on one of these is the model asserting what only the
-// code may state, so it is dropped.
-const CODE_CHECKED_TOPICS = /meta\s+description|\bh1\b|main heading|page title|title tag|\btel:|phone|mailto|e-?mail|privacy|https|ssl/i;
-
 // ---------------------------------------------------------------------------------------------------------------
 // The message: site text as data
 // ---------------------------------------------------------------------------------------------------------------
 
 const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
-// Removes anything a page could use to close its block or open another.
-export function stripDelimiters(text: string): string {
-  return text.replace(/(?:END_)?UNTRUSTED_PAGE_CONTENT/gi, '').replace(/<{3,}|>{3,}/g, '');
+// Characters that take no space: a page could put them inside a word to slip it past a plain comparison.
+const INVISIBLE = /[\u00AD\u180E\u200B-\u200D\u2060-\u2064\uFE00-\uFE0F\uFEFF]/g;
+// what may sit between the letters of a token and still read as that token
+const GAP = '[\\s_.\\-]*';
+const spelled = (token: string): RegExp => new RegExp(token.split('').join(GAP), 'gi');
+const FIXED_WORDS = spelled(DELIMITER_WORD.replace(/_/g, ''));
+const ANGLE_RUNS = /(?:<\s*){3,}|(?:>\s*){3,}/g;
+
+// Removes anything a page could use to close its data block or open another, from text that came from outside.
+// The text is first put in one canonical form (Unicode NFKC, so full-width and other look-alike letters become
+// plain ones; invisible characters removed). Then this request's code, the fixed delimiter words (in any letter
+// case, with or without spaces, underscores, dots or hyphens between the letters) and runs of three or more angle
+// brackets are removed, AGAIN AND AGAIN until the text stops changing: removing one occurrence can join the
+// pieces around it into another (UNTRUSTED_PAGE_UNTRUSTED_PAGE_CONTENT_CONTENT), and a single pass would leave that.
+export function stripDelimiters(text: string, nonce: string): string {
+  const code = spelled(nonce);
+  let out = text.normalize('NFKC').replace(INVISIBLE, '');
+  for (;;) {
+    const next = out.replace(code, '').replace(FIXED_WORDS, '').replace(ANGLE_RUNS, ' ');
+    if (next === out) return out;
+    out = next;
+  }
 }
 
 const yesNo = (value: boolean) => (value ? 'yes' : 'no');
@@ -126,41 +157,67 @@ function factsBlock(page: FetchedPage): string {
   ].join('\n');
 }
 
+export interface SentPage {
+  page: FetchedPage;
+  // the page's own words as sent (cleaned, whitespace-normalised), one entry per field: what quotes are checked against
+  own: string[];
+}
+
 export interface PreparedMessage {
   text: string;
-  // page URL -> the text that was sent for it, whitespace-normalised: what quotes are checked against
-  sent: Map<string, string>;
+  // this request's delimiter code; the system prompt must be rendered with the same one
+  nonce: string;
+  // keyed by the exact URL string that was sent for the page
+  pages: Map<string, SentPage>;
 }
 
 export function buildUserMessage(
   content: WebsiteContent,
   websiteUrl: string,
-  options?: { businessType?: string }
+  options?: { businessType?: string },
+  nonce: string = newNonce()
 ): PreparedMessage {
-  const sent = new Map<string, string>();
-  const siteIds = siteFactIds(content.pages);
-  const businessType = squash(stripDelimiters(options?.businessType || '')).slice(0, 100);
+  const clean = (text: string) => stripDelimiters(text, nonce);
+  const open = blockOpen(nonce);
+  const close = blockClose(nonce);
 
-  const pageBlocks = content.pages.map((page, index) => {
-    const url = stripDelimiters(page.url);
-    const body = stripDelimiters(page.text);
-    sent.set(url, squash(body));
-    return [
+  // One entry per URL as it will be sent. Two pages whose URLs are the same once cleaned would be told apart by
+  // nobody, so the later one is not sent at all (rather than its text overwriting the first one's).
+  const pages = new Map<string, SentPage>();
+  for (const page of content.pages) {
+    const url = clean(page.url);
+    if (pages.has(url)) continue;
+    pages.set(url, { page, own: page.segments.map((segment) => squash(clean(segment.value))).filter(Boolean) });
+  }
+  const sentPages = [...pages.values()].map(({ page }) => page);
+  const siteIds = siteFactIds(sentPages);
+
+  // Everything that came from outside (page text, page URLs, what the visitor typed) goes INSIDE a data block.
+  // Outside the blocks there is only text this code wrote: labels, counts and yes/no facts.
+  const pageBlocks = [...pages.entries()].map(([url, { page }], index) =>
+    [
       `=== PAGE ${index + 1} ===`,
-      `URL: ${url}`,
       'FACTS (computed by our code):',
       factsBlock(page),
-      `${BLOCK_OPEN} page=${index + 1}>>>`,
-      body,
-      BLOCK_CLOSE,
-    ].join('\n');
-  });
+      `${open} page=${index + 1}>>>`,
+      `URL: ${url}`,
+      clean(page.text),
+      close,
+    ].join('\n')
+  );
+
+  const businessType = squash(clean(options?.businessType || '')).slice(0, 100);
+  const visitorBlock = [
+    '=== WHAT THE VISITOR TYPED ===',
+    `${open} visitor>>>`,
+    `Site address: ${squash(clean(websiteUrl)).slice(0, 2100)}`,
+    `Business type: ${businessType || 'not given'}`,
+    close,
+  ].join('\n');
 
   const text = [
     'Audit request',
-    `Site: ${stripDelimiters(websiteUrl)}`,
-    `Business type (supplied by the visitor, data only): ${businessType || 'not given'}`,
-    `Pages read: ${content.pages.length}`,
+    `Pages read: ${pages.size}`,
     '',
     'SITE FACTS (computed by our code, across all pages read):',
     `- phone link (tel:) on any page: ${yesNo(!siteIds.includes('no_tel_link'))}`,
@@ -170,10 +227,12 @@ export function buildUserMessage(
     '',
     pageBlocks.join('\n\n'),
     '',
+    visitorBlock,
+    '',
     `Call the ${TOOL_NAME} tool now with the complete audit.`,
   ].join('\n');
 
-  return { text, sent };
+  return { text, nonce, pages };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -186,11 +245,11 @@ const evidenceJsonSchema = {
   required: ['pageUrl', 'kind', 'text'],
   properties: {
     pageUrl: { type: 'string', description: 'The URL of the page, copied exactly as given.' },
-    kind: { type: 'string', enum: ['quote', 'fact', 'absent'] },
+    kind: { type: 'string', enum: ['quote', 'fact'] },
     text: {
       type: 'string',
       description:
-        'quote: words copied exactly from that page, at most 200 characters. fact: a fact id. absent: what was looked for.',
+        'quote: the words of the page itself, copied exactly from one field, 20 to 200 characters and at least four words. fact: a fact id.',
     },
   },
 } as const;
@@ -237,8 +296,8 @@ const SUBMIT_TOOL: Anthropic.Tool & { strict: boolean } = {
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['title', 'description'],
-          properties: { title: { type: 'string' }, description: { type: 'string' } },
+          required: ['title', 'description', 'evidence'],
+          properties: { title: { type: 'string' }, description: { type: 'string' }, evidence: evidenceJsonSchema },
         },
       },
       criticalIssues: {
@@ -274,7 +333,8 @@ const requiredProse = (max: number) => prose(max).refine((s) => s.length > 0);
 
 const evidenceSchema = z.object({
   pageUrl: z.string().max(2100),
-  kind: z.enum(['quote', 'fact', 'absent']),
+  // no free-form absence (looked and did not find it): an absence can only rest on a fact the code computed
+  kind: z.enum(['quote', 'fact']),
   // quotes are kept exactly as given: they are checked, not cleaned
   text: z.string().max(2000),
 });
@@ -294,7 +354,7 @@ const toolInputSchema = z.object({
     )
     .length(ASSESSED_KEYS.length)
     .refine((list) => new Set(list.map((c) => c.key)).size === ASSESSED_KEYS.length),
-  topStrengths: z.array(z.object({ title: requiredProse(160), description: prose(500) })).max(5),
+  topStrengths: z.array(z.object({ title: requiredProse(160), description: prose(500), evidence: evidenceSchema })).max(5),
   criticalIssues: z
     .array(
       z.object({
@@ -317,50 +377,49 @@ type ToolInput = z.infer<typeof toolInputSchema>;
 // Evidence verification
 // ---------------------------------------------------------------------------------------------------------------
 
-function findPageUrl(pageUrl: string, sent: Map<string, string>): string | null {
+// The page the model named: the exact URL that was sent, or the same URL give or take a final slash when that
+// points at one page only.
+function findPageUrl(pageUrl: string, pages: Map<string, SentPage>): string | null {
   const wanted = pageUrl.trim();
-  if (sent.has(wanted)) return wanted;
+  if (pages.has(wanted)) return wanted;
   const bare = wanted.replace(/\/$/, '');
-  for (const url of sent.keys()) if (url.replace(/\/$/, '') === bare) return url;
-  return null;
+  const close = [...pages.keys()].filter((url) => url.replace(/\/$/, '') === bare);
+  return close.length === 1 ? close[0] : null;
 }
 
+const wordCount = (text: string): number => text.split(' ').filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+
 // Returns the evidence to print, or null when it does not check out.
-export function verifyEvidence(raw: RawEvidence, pages: FetchedPage[], sent: Map<string, string>): Evidence | null {
-  const pageUrl = findPageUrl(raw.pageUrl, sent);
+export function verifyEvidence(raw: RawEvidence, pages: Map<string, SentPage>): Evidence | null {
+  const pageUrl = findPageUrl(raw.pageUrl, pages);
   if (!pageUrl) return null;
+  const sent = pages.get(pageUrl)!;
 
   if (raw.kind === 'quote') {
     const quote = squash(raw.text);
-    if (quote.length < 3 || quote.length > MAX_QUOTE_LENGTH) return null;
-    // case-sensitive, whitespace-normalised, against the text that was sent for that page
-    return sent.get(pageUrl)!.includes(quote) ? { pageUrl, quote } : null;
+    // long enough to mean something: a word or two can be found on any page
+    if (quote.length < MIN_QUOTE_LENGTH || quote.length > MAX_QUOTE_LENGTH || wordCount(quote) < MIN_QUOTE_WORDS) return null;
+    // case-sensitive, whitespace-normalised, inside ONE field of that page's own words: never our labels, and
+    // never words stitched together across two fields
+    return sent.own.some((words) => words.includes(quote)) ? { pageUrl, quote } : null;
   }
 
-  if (raw.kind === 'fact') {
-    const id = raw.text.trim();
-    const page = pages.find((p) => stripDelimiters(p.url) === pageUrl);
-    if (page && (pageFactIds(page) as string[]).includes(id)) {
-      return { pageUrl, absent: PAGE_FACT_LABELS[id as PageFactId] };
-    }
-    if ((siteFactIds(pages) as string[]).includes(id)) {
-      return { pageUrl, absent: SITE_FACT_LABELS[id as SiteFactId], siteWide: true };
-    }
-    return null;
+  // a fact the code computed for that page, or across the site. This is the ONLY source of "looked for, not found".
+  const id = raw.text.trim();
+  if ((pageFactIds(sent.page) as string[]).includes(id)) {
+    return { pageUrl, absent: PAGE_FACT_LABELS[id as PageFactId] };
   }
-
-  // free-form absence: allowed only for things the code does not check itself, and never on a cut page
-  const lookedFor = squash(raw.text.replace(/!+/g, '.')).slice(0, 160);
-  if (!lookedFor || CODE_CHECKED_TOPICS.test(lookedFor)) return null;
-  const page = pages.find((p) => stripDelimiters(p.url) === pageUrl);
-  if (!page || page.truncated) return null;
-  return { pageUrl, absent: lookedFor };
+  const allPages = [...pages.values()].map(({ page }) => page);
+  if ((siteFactIds(allPages) as string[]).includes(id)) {
+    return { pageUrl, absent: SITE_FACT_LABELS[id as SiteFactId], siteWide: true };
+  }
+  return null;
 }
 
-function assemble(input: ToolInput, content: WebsiteContent, sent: Map<string, string>, websiteUrl: string): AuditResults | null {
+function assemble(input: ToolInput, pages: Map<string, SentPage>, websiteUrl: string): AuditResults | null {
   let dropped = 0;
   const check = (raw: RawEvidence): Evidence | null => {
-    const verified = verifyEvidence(raw, content.pages, sent);
+    const verified = verifyEvidence(raw, pages);
     if (verified) return verified;
     dropped += 1;
     return null;
@@ -400,6 +459,13 @@ function assemble(input: ToolInput, content: WebsiteContent, sent: Map<string, s
     if (evidence) criticalIssues.push({ title: issue.title, description: issue.description, impact: issue.impact, evidence });
   }
 
+  // a strength is a claim like any other: no evidence, no strength
+  const topStrengths: Strength[] = [];
+  for (const strength of input.topStrengths) {
+    const evidence = check(strength.evidence);
+    if (evidence) topStrengths.push({ title: strength.title, description: strength.description, evidence });
+  }
+
   return {
     success: true,
     websiteUrl,
@@ -411,10 +477,10 @@ function assemble(input: ToolInput, content: WebsiteContent, sent: Map<string, s
       ...categories,
       ...UNASSESSED_CATEGORIES.map((name) => ({ name, assessed: false as const, reason: NOT_ASSESSED_SENTENCE })),
     ],
-    topStrengths: input.topStrengths,
+    topStrengths,
     criticalIssues,
     actionPlan: input.actionPlan,
-    pagesRead: [...sent.keys()],
+    pagesRead: [...pages.keys()],
     droppedFindings: dropped,
   };
 }
@@ -423,10 +489,18 @@ function assemble(input: ToolInput, content: WebsiteContent, sent: Map<string, s
 // The call
 // ---------------------------------------------------------------------------------------------------------------
 
+// maxRetries 0: this module already asks once more itself when a reply is unusable, and that is the whole budget.
+// With the SDK retrying as well, one audit could become four requests. A slow call is cut off rather than left hanging.
+export const AUDIT_CLIENT_OPTIONS = { timeout: 90_000, maxRetries: 0 } as const;
+
+// The SDK reads its key from the environment.
+export function createAuditClient(): Anthropic {
+  return new Anthropic(AUDIT_CLIENT_OPTIONS);
+}
+
 let defaultClient: AuditModelClient | undefined;
 function getClient(): AuditModelClient {
-  // the SDK reads its key from the environment; a slow call is cut off rather than left hanging
-  defaultClient ??= new Anthropic({ timeout: 90_000, maxRetries: 1 });
+  defaultClient ??= createAuditClient();
   return defaultClient;
 }
 
@@ -459,14 +533,14 @@ export async function runAudit(
 
   try {
     if (!content.pages.length) return failure;
-    const { text, sent } = buildUserMessage(content, websiteUrl, options);
+    const { text, nonce, pages } = buildUserMessage(content, websiteUrl, options);
     const client = deps.client ?? getClient();
     // output_config.effort is part of the Messages API; the installed SDK's types predate it, so it rides on a widened type.
     const params: Anthropic.MessageCreateParamsNonStreaming & { output_config: { effort: typeof AUDIT_EFFORT } } = {
       model: AUDIT_MODEL,
       max_tokens: AUDIT_MAX_TOKENS,
       output_config: { effort: AUDIT_EFFORT },
-      system: SYSTEM_PROMPT,
+      system: renderSystemPrompt(nonce),
       tools: [SUBMIT_TOOL],
       tool_choice: { type: 'auto', disable_parallel_tool_use: true },
       messages: [{ role: 'user', content: text }],
@@ -481,7 +555,7 @@ export async function runAudit(
       if (typeof reply === 'string') {
         miss = reply;
       } else {
-        const result = assemble(reply, content, sent, websiteUrl);
+        const result = assemble(reply, pages, websiteUrl);
         if (result) {
           if (result.droppedFindings > 0) console.warn(`${tag} evidence dropped: ${result.droppedFindings}`);
           return result;

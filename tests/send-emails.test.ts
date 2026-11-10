@@ -74,7 +74,7 @@ describe('sendAuditEmails', () => {
     const evilUrl = 'https://inject.example.test/?q="><script>alert(2)</script>&r=<a href=x>'
     const evilAudit = {
       ...auditFixture,
-      topStrengths: [{ title: '<a href=x>strength</a>', description: '' }],
+      topStrengths: [{ title: '<a href=x>strength</a>', description: '', evidence: { pageUrl: `${SITE}/`, quote: '<a href=x>quoted</a> "><script>alert(4)</script>' } }],
       criticalIssues: [{ title: '"><script>alert(3)</script>', description: '', impact: '', evidence: auditFixture.criticalIssues[0].evidence }],
       categories: [{ ...auditFixture.categories[0], name: '<a href=x>cat</a>' }],
     }
@@ -143,6 +143,41 @@ describe('sendAuditEmails', () => {
         expect(mail.html).not.toContain('<script')
         expect(mail.html).not.toContain('alert("now")')
       }
+    })
+
+    it('[2e] the visitor email prints the evidence beside every strength and every priority issue it lists', async () => {
+      send.mockResolvedValue(resendOk())
+      const results = shaped()
+      results.topStrengths = [
+        { title: 'Clear offer', description: 'd', evidence: { pageUrl: `${SITE}/services`, quote: 'We fix leaks & drains across the county' } },
+        { title: 'Has a title', description: 'd', evidence: { pageUrl: `${SITE}/`, quote: 'Plumbers you can <b>trust</b> in Dayton' } },
+      ]
+      await sendAuditEmails({ ...options(), auditResults: results })
+      const html: string = send.mock.calls[0][0].html
+      const li = (title: string) => html.split('<li>').find((item) => item.startsWith(title)) ?? ''
+      expect(li('Clear offer')).toContain('On /services: \u201CWe fix leaks &amp; drains across the county\u201D')
+      expect(li('Has a title')).toContain('On /: \u201CPlumbers you can &lt;b&gt;trust&lt;/b&gt; in Dayton\u201D')
+      expect(li('Loud banner')).toContain('On /offers: \u201CSave &lt;script&gt;')
+      expect(li('No description')).toContain('Looked for: a meta description, not found on /about')
+      expect(html).not.toContain('<b>trust</b>')
+    })
+
+    it('[7d] neither email makes a link out of the visitor\'s URL: it is shown as text only', async () => {
+      send.mockResolvedValue(resendOk())
+      const url = 'https://pii-site.example.test/a-path-the-visitor-chose'
+      await sendAuditEmails({ ...options(), websiteUrl: url, auditResults: shaped() })
+      expect(send).toHaveBeenCalledTimes(2)
+      for (const [mail] of send.mock.calls) {
+        expect(mail.html).toContain(url)
+        const hrefs = [...(mail.html as string).matchAll(/href\s*=\s*["']([^"']*)["']/gi)].map((m) => m[1])
+        for (const href of hrefs) {
+          expect(href).not.toContain('pii-site')
+          expect(href).toMatch(/^(https:\/\/enclavellc\.net(\/|$)|mailto:)/)
+        }
+        expect(mail.html).not.toMatch(/<a\b[^>]*>[^<]*pii-site/i)
+      }
+      // the admin email still shows the address, as words
+      expect(send.mock.calls[1][0].html).toMatch(/<strong>Website:<\/strong>\s*https:\/\/pii-site\.example\.test\/a-path-the-visitor-chose/)
     })
 
     it('the admin email ranks only assessed areas and says what the score covers', async () => {

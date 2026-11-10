@@ -8,13 +8,20 @@
 //     including the daily ceiling, and this needs a shared store before that happens.
 //
 // The limits (config.ts RATE_LIMITS, DEFAULT_DAILY_LIMIT):
-//   - 3 audits per client IP per hour        (sliding window)
-//   - 5 audits per email address per day     (sliding 24 h window)
-//   - 100 audits per hour across everyone    (sliding window)
+//   - 3 requests per client per hour         (sliding window). A client is an IPv4 address or an IPv6 /64:
+//                                             one IPv6 subscriber holds a whole /64 and can use a new address
+//                                             from it for every request, so the /64 is what gets counted.
+//   - 5 requests per email address per day   (sliding 24 h window). The address is trimmed, lower-cased and has
+//                                             any +tag removed, so name+1@ and name+2@ are one address.
+//   - 100 requests per hour across everyone  (sliding window). This is NOT redundant with the 30-a-day audit
+//                                             ceiling below: a request that is not run automatically (a lead)
+//                                             never touches that ceiling, and leads are only bounded by 200 a
+//                                             day. The hourly limit is what bounds how FAST anything at all,
+//                                             leads included, can be made to happen through this form.
 //   - 30 audits started per UTC day, or AUDIT_DAILY_LIMIT if it is a positive integer
 //   - 200 lead emails per UTC day (a request that is not run automatically; it never uses the 30)
 //
-// Nothing here is logged. Keys are SHA-256 hashes of the IP and of the lower-cased email, and a key is
+// Nothing here is logged. Keys are SHA-256 hashes of the client bucket and of the normalised email, and a key is
 // dropped as soon as its window has passed.
 //
 // More than one process: a PM2 cluster worker refuses every request (see decide()). The limits need a shared store
@@ -27,6 +34,7 @@ import cluster from 'node:cluster';
 import { createHash } from 'node:crypto';
 import { DEFAULT_DAILY_LIMIT, LEAD_DAILY_LIMIT, RATE_LIMITS } from './config';
 import { auditSetting } from './env';
+import { parseIPv4, parseIPv6 } from './safe-fetch';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -64,16 +72,40 @@ export function parseDailyLimit(raw: string | undefined): number {
 const hashKey = (kind: string, value: string): string =>
   createHash('sha256').update(`${kind}:${value}`).digest('hex');
 
-// The client's address as Cloudflare reports it. These headers are trustworthy ONLY because the origin is
-// reachable through the Cloudflare tunnel alone; if the origin is ever exposed directly, a caller can set
-// them and choose its own bucket. Callers with no usable header all share the "unknown" bucket, which is
-// the safe direction.
+// The client's address, from ONE header: cf-connecting-ip, which Cloudflare sets itself on every request it
+// passes on (a value the caller sent under that name is replaced). It is trustworthy because the origin is
+// reachable through the Cloudflare tunnel only. x-forwarded-for is deliberately NOT read: if the origin were ever
+// reachable directly, a caller could set that header and pick its own bucket on every request.
+// A request with no cf-connecting-ip did not come through Cloudflare; all such callers share the one "unknown"
+// bucket, which is the safe direction.
 export function clientIp(headers: Headers): string {
-  const cf = headers.get('cf-connecting-ip')?.trim();
-  if (cf) return cf;
-  const forwarded = headers.get('x-forwarded-for')?.split(',')[0]?.trim();
-  if (forwarded) return forwarded;
-  return 'unknown';
+  return headers.get('cf-connecting-ip')?.trim() || 'unknown';
+}
+
+// What a client is counted as. IPv4: the address. IPv6: its /64 (the first four groups, after the address is
+// properly expanded by the same parser the fetch guard uses), because a single subscriber is routed a whole /64.
+// An IPv4 address written inside IPv6 (::ffff:a.b.c.d) counts as that IPv4 address. Anything else is counted as
+// the text it is, so "unknown" stays one bucket.
+export function ipBucket(ip: string): string {
+  const text = ip.trim().toLowerCase();
+  if (parseIPv4(text)) return text;
+  const bytes = parseIPv6(text);
+  if (!bytes) return text;
+  if (bytes.slice(0, 10).every((b) => b === 0) && bytes[10] === 0xff && bytes[11] === 0xff) return bytes.slice(12).join('.');
+  const groups: string[] = [];
+  for (let i = 0; i < 8; i += 2) groups.push(((bytes[i] << 8) | bytes[i + 1]).toString(16));
+  return `${groups.join(':')}::/64`;
+}
+
+// The address a per-email count is kept under: trimmed, lower-cased, +tag removed from the part before the @.
+// Dots stay (only some providers ignore them, and treating two people's addresses as one would be worse).
+export function emailBucket(email: string): string {
+  const text = email.trim().toLowerCase();
+  const at = text.lastIndexOf('@');
+  if (at < 1) return text;
+  const local = text.slice(0, at);
+  const plus = local.indexOf('+');
+  return `${plus > 0 ? local.slice(0, plus) : local}${text.slice(at)}`;
 }
 
 export function createAuditLimiter(options: AuditLimiterOptions = {}) {
@@ -125,8 +157,8 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
       daily.count = 0;
     }
 
-    const ipKey = hashKey('ip', ip);
-    const emailKey = hashKey('email', email.trim().toLowerCase());
+    const ipKey = hashKey('ip', ipBucket(ip));
+    const emailKey = hashKey('email', emailBucket(email));
     const ipHits = byIp.get(ipKey) ?? [];
     const emailHits = byEmail.get(emailKey) ?? [];
 

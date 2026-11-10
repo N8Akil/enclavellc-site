@@ -225,11 +225,42 @@ describe('POST /api/audit/generate', () => {
       expectNoPii(logs, { includeLog: true })
     })
 
-    it('without cf-connecting-ip the first x-forwarded-for entry is the caller; with neither, everyone shares one bucket', async () => {
-      for (let i = 0; i < 3; i++) expect((await POST(postJson(URL_, body, { 'x-forwarded-for': '198.51.100.7, 10.0.0.1' }))).status).toBe(200)
-      await expect429(await POST(postJson(URL_, body, { 'x-forwarded-for': '198.51.100.7, 10.9.9.9' })), TOO_MANY)
-      for (let i = 0; i < 2; i++) expect((await POST(postJson(URL_, body))).status).toBe(200)
-      await expect429(await POST(postJson(URL_, body)), TOO_MANY)
+    it('[3c] only cf-connecting-ip names the caller: requests without it share one bucket, whatever x-forwarded-for they send', async () => {
+      // three requests, each claiming a different address in x-forwarded-for: all counted as the one "unknown" caller
+      for (let i = 0; i < 3; i++) expect((await POST(postJson(URL_, visitor(i), { 'x-forwarded-for': `198.51.100.${i}, 10.0.0.1` }))).status).toBe(202)
+      await expect429(await POST(postJson(URL_, visitor(4), { 'x-forwarded-for': '198.51.100.99' })), TOO_MANY)
+      await expect429(await POST(postJson(URL_, visitor(5))), TOO_MANY)
+      // a request that did come through Cloudflare is its own caller, and x-forwarded-for changes nothing for it
+      for (let i = 0; i < 3; i++) expect((await POST(postJson(URL_, visitor(10 + i), { 'cf-connecting-ip': '203.0.113.77', 'x-forwarded-for': `198.51.100.${i}` }))).status).toBe(202)
+      await expect429(await POST(postJson(URL_, visitor(14), { 'cf-connecting-ip': '203.0.113.77', 'x-forwarded-for': '198.51.100.200' })), TOO_MANY)
+    })
+
+    it('[3b] an IPv6 caller is counted by its /64, and name+tag@ is the same address as name@', async () => {
+      for (let i = 0; i < 3; i++) expect((await POST(postJson(URL_, visitor(i), from(`2001:db8:abcd:12::${i + 1}`)))).status).toBe(202)
+      await expect429(await POST(postJson(URL_, visitor(4), from('2001:db8:abcd:12:ffff:ffff:ffff:ffff'))), TOO_MANY)
+      expect((await POST(postJson(URL_, visitor(5), from('2001:db8:abcd:13::1')))).status).toBe(202)
+
+      for (let i = 0; i < 5; i++) expect((await POST(postJson(URL_, { ...body, userEmail: `tagged+${i}@example.test` }, from(`203.0.113.${i}`)))).status).toBe(202)
+      await expect429(await POST(postJson(URL_, { ...body, userEmail: 'tagged+more@example.test' }, from('203.0.113.50'))), TOO_MANY)
+      await expect429(await POST(postJson(URL_, { ...body, userEmail: 'Tagged@example.test' }, from('203.0.113.51'))), TOO_MANY)
+    })
+
+    it('[3d] the hourly limit fires on the LEAD path: 100 visitors who are not on the list, then 429, with the day\'s audit ceiling untouched', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date('2026-11-10T09:00:00Z'))
+      // the default ceiling of 30 audits a day is in force, and none of these requests may use it
+      for (let i = 0; i < 100; i++) expect((await POST(postJson(URL_, visitor(i), from(`198.51.100.${i}`)))).status).toBe(202)
+      expect(send).toHaveBeenCalledTimes(100)
+      await expect429(await POST(postJson(URL_, visitor(101), from('198.51.100.101'))), LIMIT_REACHED)
+      expect(send).toHaveBeenCalledTimes(100)
+      expectNothingRan()
+      expect(loggedText(logs.warn)).toMatch(/rate limited: global/)
+      expect(loggedText(logs.warn)).not.toMatch(/rate limited: daily/)
+
+      // an hour on, a listed address still gets a full audit: the 100 leads took none of the 30 audit slots
+      vi.setSystemTime(new Date('2026-11-10T10:00:01Z'))
+      for (let i = 0; i < 5; i++) expect((await POST(postJson(URL_, body, from(`203.0.113.${i}`)))).status).toBe(200)
+      expect(vi.mocked(runAudit)).toHaveBeenCalledTimes(5)
     })
 
     it('the 6th request for one email in a day is 429 whatever the IP', async () => {

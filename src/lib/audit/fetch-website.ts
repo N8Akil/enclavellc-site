@@ -11,7 +11,7 @@ import {
   TRUNCATION_MARKER,
 } from './config';
 import { checkUrl, safeFetchPage, UnsafeUrlError, type SafeFetchOptions } from './safe-fetch';
-import type { FetchedPage, PageFacts, WebsiteContent } from './types';
+import type { FetchedPage, PageFacts, PageSegment, WebsiteContent } from './types';
 
 export interface FetchWebsiteOptions extends Pick<SafeFetchOptions, 'resolver' | 'transport' | 'timeoutMs' | 'maxBytes'> {
   // whole-audit time limit across all page requests
@@ -76,17 +76,12 @@ function capTotal(pages: FetchedPage[]): FetchedPage[] {
       kept.push(page);
       used += page.text.length;
     } else {
-      const text = cutText(page.text, room);
-      kept.push({ ...page, text, truncated: true });
-      used += text.length;
+      const cut = cutPage(page, room);
+      kept.push(cut);
+      used += cut.text.length;
     }
   }
   return kept;
-}
-
-function cutText(text: string, cap: number): string {
-  if (text.length <= cap) return text;
-  return `${text.slice(0, Math.max(0, cap - TRUNCATION_MARKER.length - 1))} ${TRUNCATION_MARKER}`;
 }
 
 function discoverInternalLinks(html: string, baseUrl: string, baseHost: string): string[] {
@@ -153,16 +148,22 @@ export function extractPage(html: string, url: string): FetchedPage {
     formCount: $('form').length,
   };
 
-  const altText = squash(
-    images
-      .map((_, el) => $(el).attr('alt') || '')
-      .get()
-      .filter(Boolean)
-      .join(' | ')
-  );
-
   // not content: removed before any text is read
-  $('script, style, iframe, noscript, template').remove();
+  $('script, style, iframe').remove();
+  // VISIBLE TEXT ONLY, as far as the markup itself says: text the page hides in its own markup is not read, so it
+  // can be neither quoted nor used as evidence. Dropped: <template>, <noscript>, [hidden], aria-hidden="true", and
+  // inline styles with display:none, visibility:hidden, or a zero width, height or font-size.
+  // THE LIMIT: hiding done in a stylesheet (a class) or by script is NOT detected. This is a text read, not a render.
+  $('template, noscript, [hidden], [aria-hidden="true" i]').remove();
+  $('[style]')
+    .filter((_, el) => HIDING_STYLE.test(($(el).attr('style') || '').toLowerCase().replace(/\s+/g, '')))
+    .remove();
+
+  const altItems = $('img')
+    .map((_, el) => squash($(el).attr('alt') || ''))
+    .get()
+    .filter(Boolean);
+
   // keep words apart that sit in separate blocks
   $('p, div, li, br, h1, h2, h3, h4, h5, h6, td, th, tr, section, article, header, footer, nav, main, aside, a, button, label, option, dt, dd, blockquote, figcaption, summary').each(
     (_, el) => {
@@ -170,49 +171,64 @@ export function extractPage(html: string, url: string): FetchedPage {
     }
   );
 
-  const list = (selector: string) =>
-    squash(
-      $(selector)
-        .map((_, el) => squash($(el).text()))
-        .get()
-        .filter(Boolean)
-        .join(' | ')
-    );
-  const h1 = list('h1');
-  const h2 = list('h2');
-  const h3 = list('h3');
+  const items = (selector: string) =>
+    $(selector)
+      .map((_, el) => squash($(el).text()))
+      .get()
+      .filter(Boolean);
+  const h1 = items('h1');
+  const h2 = items('h2');
+  const h3 = items('h3');
 
   // navigation and footer are read on their own, then taken out so the body text is the page's own content
   const navigation = squash($('header, nav').not('header nav, footer nav').text());
   const footer = squash($('footer').text());
   $('header, nav, footer').remove();
-  const actions = [
-    ...new Set(
-      $('a, button')
-        .map((_, el) => squash($(el).text()))
-        .get()
-        .filter((label) => label.length > 0 && label.length <= 60)
-    ),
-  ]
-    .slice(0, 40)
-    .join(' | ');
+  const actions = [...new Set(items('a, button').filter((label) => label.length <= 60))].slice(0, 40);
   const content = squash($('body').text());
 
-  const full = [
-    `Title: ${title}`,
-    `Meta Description: ${metaDescription}`,
-    `Main Heading (H1): ${h1}`,
-    `Section Headings (H2): ${h2}`,
-    `Subsection Headings (H3): ${h3}`,
-    `Navigation: ${navigation}`,
-    `Content: ${content}`,
-    `Links and Buttons: ${actions}`,
-    `Image Alt Text: ${altText}`,
-    `Footer: ${footer}`,
-  ].join('\n');
+  // Each field is OUR label followed by the PAGE'S words. The words are also kept on their own (segments), so a
+  // quote can be checked against what the page said and never against a label or a separator we added.
+  const fields: Array<[label: string, values: string[]]> = [
+    ['Title', [title]],
+    ['Meta Description', [metaDescription]],
+    ['Main Heading (H1)', h1],
+    ['Section Headings (H2)', h2],
+    ['Subsection Headings (H3)', h3],
+    ['Navigation', [navigation]],
+    ['Content', [content]],
+    ['Links and Buttons', actions],
+    ['Image Alt Text', altItems],
+    ['Footer', [footer]],
+  ];
+  let full = '';
+  const segments: PageSegment[] = [];
+  fields.forEach(([label, values], index) => {
+    full += `${index ? '\n' : ''}${label}: `;
+    values.forEach((value, i) => {
+      if (i) full += ' | ';
+      if (value) segments.push({ start: full.length, value });
+      full += value;
+    });
+  });
 
-  const text = cutText(full, PAGE_TEXT_CAP);
-  return { url, title: title || 'Untitled', text, truncated: text !== full, facts };
+  return cutPage({ url, title: title || 'Untitled', text: full, truncated: false, facts, segments }, PAGE_TEXT_CAP);
+}
+
+// (?:^|;) keeps max-height:0 and line-height:0 out of it: those do not hide text by themselves
+const HIDING_STYLE = /(?:^|;)(?:display:none|visibility:hidden|(?:width|height|font-size):0(?:\.0+)?(?:px|em|rem|pt|%|vh|vw)?)(?:!important)?(?:;|$)/;
+
+// Cuts a page's text to `cap` characters with the visible marker, and its segments with it.
+function cutPage(page: FetchedPage, cap: number): FetchedPage {
+  if (page.text.length <= cap) return page;
+  const keep = Math.max(0, cap - TRUNCATION_MARKER.length - 1);
+  // the marker is ours; whatever of the page's words was cut off is no longer quotable
+  const body = page.truncated ? page.text.slice(0, page.text.length - TRUNCATION_MARKER.length - 1) : page.text;
+  const text = `${body.slice(0, keep)} ${TRUNCATION_MARKER}`;
+  const segments = page.segments
+    .filter((segment) => segment.start < keep)
+    .map((segment) => ({ start: segment.start, value: segment.value.slice(0, keep - segment.start) }));
+  return { ...page, text, truncated: true, segments };
 }
 
 function normalizeUrl(url: string): string {

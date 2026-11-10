@@ -46,7 +46,8 @@ export const MAX_URL_LENGTH = 2048;
 // Address classification
 // ---------------------------------------------------------------------------------------------------------------
 
-function parseIPv4(ip: string): number[] | null {
+// Four bytes, or null when the text is not a plain dotted IPv4 address. Exported for limits.ts.
+export function parseIPv4(ip: string): number[] | null {
   if (!isIPv4(ip)) return null;
   const parts = ip.split('.').map((p) => Number(p));
   return parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255) ? parts : null;
@@ -72,7 +73,8 @@ function isPublicIPv4(b: number[]): boolean {
 }
 
 // 16 bytes, or null when the text is not a plain IPv6 address (zone ids are refused).
-function parseIPv6(ip: string): number[] | null {
+// Exported for limits.ts, which groups IPv6 callers by their /64.
+export function parseIPv6(ip: string): number[] | null {
   if (!isIPv6(ip) || ip.includes('%')) return null;
   let text = ip;
   const lastColon = text.lastIndexOf(':');
@@ -184,36 +186,53 @@ export type Transport = (request: TransportRequest) => Promise<TransportResponse
 const defaultResolver: Resolver = (hostname) => dnsLookup(hostname, { all: true });
 
 // node:http / node:https with a lookup that can only answer the vetted address. The Host header and the TLS
-// server name stay the hostname. agent:false: one connection per request, nothing pooled or reused.
-const defaultTransport: Transport = (request) =>
-  new Promise((resolve, reject) => {
-    const secure = request.url.protocol === 'https:';
-    const pinnedLookup = (
-      _hostname: string,
-      options: unknown,
-      callback: (err: Error | null, address: string | ResolvedAddress[], family?: number) => void
-    ) => {
-      const wantsAll = typeof options === 'object' && options !== null && (options as { all?: boolean }).all === true;
-      if (wantsAll) callback(null, [{ address: request.address, family: request.family }]);
-      else callback(null, request.address, request.family);
-    };
-    const options: https.RequestOptions = {
-      protocol: request.url.protocol,
-      host: request.hostname,
-      port: secure ? 443 : 80,
-      path: `${request.url.pathname}${request.url.search}`,
-      method: 'GET',
-      headers: request.headers,
-      agent: false,
-      lookup: pinnedLookup as https.RequestOptions['lookup'],
-      signal: request.signal,
-    };
-    const req = (secure ? https : http).request(options, (res) => {
-      resolve({ status: res.statusCode ?? 0, headers: res.headers, body: res, destroy: () => res.destroy() });
+// server name stay the hostname, and the certificate is checked against the hostname as usual: pinning the
+// address does not weaken that. agent:false: one connection per request, nothing pooled or reused.
+//
+// The options exist ONLY so a test can point the real transport at a local port and trust a throwaway CA
+// (tests/audit-transport.test.ts). Production code never passes them: tests/audit-static.test.ts fails if
+// this is called with an argument anywhere under src/.
+export interface NodeTransportOptions {
+  port?: number;
+  ca?: string | Buffer;
+}
+
+export function createNodeTransport(options?: NodeTransportOptions): Transport {
+  return (request) =>
+    new Promise((resolve, reject) => {
+      const secure = request.url.protocol === 'https:';
+      const pinnedLookup = (
+        _hostname: string,
+        lookupOptions: unknown,
+        callback: (err: Error | null, address: string | ResolvedAddress[], family?: number) => void
+      ) => {
+        const wantsAll =
+          typeof lookupOptions === 'object' && lookupOptions !== null && (lookupOptions as { all?: boolean }).all === true;
+        if (wantsAll) callback(null, [{ address: request.address, family: request.family }]);
+        else callback(null, request.address, request.family);
+      };
+      const requestOptions: https.RequestOptions = {
+        protocol: request.url.protocol,
+        host: request.hostname,
+        port: options?.port ?? (secure ? 443 : 80),
+        path: `${request.url.pathname}${request.url.search}`,
+        method: 'GET',
+        headers: request.headers,
+        agent: false,
+        lookup: pinnedLookup as https.RequestOptions['lookup'],
+        signal: request.signal,
+        ...(secure && options?.ca !== undefined ? { ca: options.ca } : {}),
+      };
+      const req = (secure ? https : http).request(requestOptions, (res) => {
+        resolve({ status: res.statusCode ?? 0, headers: res.headers, body: res, destroy: () => res.destroy() });
+      });
+      req.on('error', reject);
+      req.end();
     });
-    req.on('error', reject);
-    req.end();
-  });
+}
+
+// ports 443 and 80, the system's certificate authorities
+const defaultTransport: Transport = createNodeTransport();
 
 // ---------------------------------------------------------------------------------------------------------------
 // The guarded page fetch
@@ -250,12 +269,29 @@ function headerValue(headers: TransportResponse['headers'], name: string): strin
   return '';
 }
 
-function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+// Settles with the work, or with TIMEOUT the moment the signal aborts. The abort listener is removed as soon
+// as the work settles: this runs once per body chunk, and a listener left behind each time would pile up on
+// the signal for the life of the request.
+export function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new UnsafeUrlError('TIMEOUT'));
+      // the work's own outcome is not wanted any more; its rejection must not go unhandled
+      work.catch(() => {});
+      return;
+    }
     const onAbort = () => reject(new UnsafeUrlError('TIMEOUT'));
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-    work.then(resolve, (error) => reject(error));
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      }
+    );
   });
 }
 

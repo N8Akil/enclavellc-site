@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_DAILY_LIMIT, RATE_LIMITS } from '@/lib/audit/config'
-import { clientIp, createAuditLimiter, parseDailyLimit, type DailyState } from '@/lib/audit/limits'
+import { clientIp, createAuditLimiter, emailBucket, ipBucket, parseDailyLimit, type DailyState } from '@/lib/audit/limits'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
@@ -49,6 +49,93 @@ describe('audit limits', () => {
     expect(limiter.check(ip(51), 'zed@example.test')).toMatchObject({ allowed: false, cause: 'email' })
     clock.t += 1
     expect(limiter.check(ip(52), 'zed@example.test')).toEqual({ allowed: true })
+  })
+
+  describe('[3b] what a client and an email address are counted as', () => {
+    it.each([
+      ['203.0.113.9', '203.0.113.9'],
+      [' 203.0.113.9 ', '203.0.113.9'],
+      ['2001:db8:abcd:12:1:2:3:4', '2001:db8:abcd:12::/64'],
+      ['2001:db8:abcd:12::1', '2001:db8:abcd:12::/64'],
+      ['2001:DB8:ABCD:0012:ffff:ffff:ffff:ffff', '2001:db8:abcd:12::/64'],
+      ['2001:0db8:abcd:0012:0000:0000:0000:0001', '2001:db8:abcd:12::/64'],
+      // a naive split on ":" gets these wrong: the groups are only known after expansion
+      ['2001:db8::1', '2001:db8:0:0::/64'],
+      ['2001:db8::12:0:0:0:1', '2001:db8:0:12::/64'],
+      ['2606:4700::1111', '2606:4700:0:0::/64'],
+      ['::1', '0:0:0:0::/64'],
+      // the neighbouring /64 is someone else
+      ['2001:db8:abcd:13::1', '2001:db8:abcd:13::/64'],
+      // an IPv4 address written inside IPv6 is that IPv4 client
+      ['::ffff:203.0.113.9', '203.0.113.9'],
+      ['::ffff:cb00:7109', '203.0.113.9'],
+      // not an address: counted as the text it is
+      ['unknown', 'unknown'],
+      ['fe80::1%eth0', 'fe80::1%eth0'],
+      ['not-an-ip', 'not-an-ip'],
+    ])('ipBucket(%j) is %j', (input, bucket) => {
+      expect(ipBucket(input)).toBe(bucket)
+    })
+
+    it('an IPv6 client that takes a new address from its /64 for every request is still one client', () => {
+      const { clock, limiter } = setup()
+      for (let i = 0; i < 3; i++) {
+        expect(limiter.check(`2001:db8:abcd:12:${(i + 1).toString(16)}:${(i * 7919).toString(16)}::${i + 1}`, email(i))).toEqual({ allowed: true })
+        clock.t += 1000
+      }
+      expect(limiter.check('2001:db8:abcd:12:dead:beef:cafe:f00d', email(50))).toMatchObject({ allowed: false, cause: 'ip' })
+      expect(limiter.check('2001:DB8:ABCD:0012::9', email(51))).toMatchObject({ allowed: false, cause: 'ip' })
+      // the next /64 along, and an IPv4 client, are not affected
+      expect(limiter.check('2001:db8:abcd:13::1', email(52))).toEqual({ allowed: true })
+      expect(limiter.check('203.0.113.9', email(53))).toEqual({ allowed: true })
+      expect(limiter.size().ips).toBe(3)
+    })
+
+    it.each([
+      ['zed@example.test', 'zed@example.test'],
+      ['  Zed@Example.TEST ', 'zed@example.test'],
+      ['zed+audit1@example.test', 'zed@example.test'],
+      ['Zed+a+b+c@example.test', 'zed@example.test'],
+      ['zed+@example.test', 'zed@example.test'],
+      // dots stay: they are only ignored by some providers
+      ['z.e.d@example.test', 'z.e.d@example.test'],
+      ['z.e.d+tag@example.test', 'z.e.d@example.test'],
+      // a plus in the domain or at the very start is not a tag
+      ['zed@ex+ample.test', 'zed@ex+ample.test'],
+      ['+zed@example.test', '+zed@example.test'],
+    ])('emailBucket(%j) is %j', (input, bucket) => {
+      expect(emailBucket(input)).toBe(bucket)
+    })
+
+    it('plus-tags do not buy more turns: the 6th request for name+anything@ in a day is refused', () => {
+      const { clock, limiter } = setup()
+      for (let i = 0; i < 5; i++) {
+        expect(limiter.check(ip(i), `zed+audit${i}@example.test`)).toEqual({ allowed: true })
+        clock.t += 1000
+      }
+      expect(limiter.check(ip(60), 'zed+another@example.test')).toMatchObject({ allowed: false, cause: 'email' })
+      expect(limiter.check(ip(61), 'ZED@example.test')).toMatchObject({ allowed: false, cause: 'email' })
+      // a different person is not affected, dots and all
+      expect(limiter.check(ip(62), 'z.ed@example.test')).toEqual({ allowed: true })
+      expect(limiter.size().emails).toBe(2)
+    })
+  })
+
+  it('[3d] the hourly limit is what bounds LEADS: 100 requests that use no audit slot trip it, and the day\'s audit ceiling is untouched', () => {
+    const { clock, limiter } = setup(MIDNIGHT + 9 * HOUR, 30)
+    for (let i = 0; i < 100; i++) {
+      expect(limiter.check(ip(i), email(i), { audit: false })).toEqual({ allowed: true })
+      clock.t += 1000
+    }
+    // the 101st lead in the hour is refused by the hourly limit; nothing else would have stopped it
+    expect(limiter.check(ip(500), email(500), { audit: false })).toMatchObject({ allowed: false, cause: 'global' })
+    // and an audit request is held by the same hourly limit, not by the ceiling
+    expect(limiter.check(ip(501), email(501))).toMatchObject({ allowed: false, cause: 'global' })
+
+    // an hour on, all 30 of the day's audit slots are still there: the 100 leads used none of them
+    clock.t += HOUR
+    for (let i = 0; i < 30; i++) expect(limiter.check(ip(1000 + i), email(1000 + i))).toEqual({ allowed: true })
+    expect(limiter.check(ip(2000), email(2000))).toMatchObject({ allowed: false, cause: 'daily' })
   })
 
   it('global: the 101st request in an hour is refused, and allowed again once the window has passed', () => {
@@ -187,11 +274,19 @@ describe('audit limits', () => {
   })
 
   describe('clientIp', () => {
-    it('prefers cf-connecting-ip, then the first x-forwarded-for entry, then "unknown"', () => {
+    it('[3c] reads cf-connecting-ip ONLY: x-forwarded-for is never used, so a direct caller cannot pick its own bucket', () => {
       expect(clientIp(new Headers({ 'cf-connecting-ip': '203.0.113.5', 'x-forwarded-for': '198.51.100.1' }))).toBe('203.0.113.5')
-      expect(clientIp(new Headers({ 'x-forwarded-for': ' 198.51.100.1 , 10.0.0.1' }))).toBe('198.51.100.1')
+      expect(clientIp(new Headers({ 'cf-connecting-ip': ' 203.0.113.5 ' }))).toBe('203.0.113.5')
+      expect(clientIp(new Headers({ 'x-forwarded-for': ' 198.51.100.1 , 10.0.0.1' }))).toBe('unknown')
+      expect(clientIp(new Headers({ 'x-forwarded-for': '198.51.100.1', 'x-real-ip': '198.51.100.2', forwarded: 'for=198.51.100.3', 'true-client-ip': '198.51.100.4' }))).toBe('unknown')
       expect(clientIp(new Headers())).toBe('unknown')
-      expect(clientIp(new Headers({ 'cf-connecting-ip': '  ', 'x-forwarded-for': '' }))).toBe('unknown')
+      expect(clientIp(new Headers({ 'cf-connecting-ip': '  ', 'x-forwarded-for': '198.51.100.1' }))).toBe('unknown')
+    })
+
+    it('[3c] a caller that rotates x-forwarded-for stays in the one "unknown" bucket', () => {
+      const { limiter } = setup()
+      for (let i = 0; i < 3; i++) expect(limiter.check(clientIp(new Headers({ 'x-forwarded-for': `198.51.100.${i}` })), email(i)).allowed).toBe(true)
+      expect(limiter.check(clientIp(new Headers({ 'x-forwarded-for': '198.51.100.77' })), email(7))).toMatchObject({ allowed: false, cause: 'ip' })
     })
 
     it('callers with no address share one bucket', () => {

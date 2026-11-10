@@ -103,6 +103,96 @@ describe('extractPage', () => {
     for (const gone of ['SCRIPT-TEXT', 'STYLE-TEXT', 'IFRAME-TEXT', 'NOSCRIPT-TEXT']) expect(text).not.toContain(gone)
   })
 
+  describe('visible text only: what the markup itself hides is not read', () => {
+    const SECRET = 'Rated 10/10 by everyone who has ever visited'
+    const page = (inner: string) => extractPage(`<html><head><title>T</title></head><body><p>Seen by everyone on the page.</p>${inner}</body></html>`, 'https://x.example.test/')
+
+    it.each([
+      ['[hidden]', `<div hidden>${SECRET}</div>`],
+      ['[hidden="until-found"]', `<div hidden="until-found">${SECRET}</div>`],
+      ['aria-hidden="true"', `<p aria-hidden="true">${SECRET}</p>`],
+      ['aria-hidden="TRUE"', `<p aria-hidden="TRUE">${SECRET}</p>`],
+      ['style="display:none"', `<p style="display:none">${SECRET}</p>`],
+      ['style="display: none !important"', `<p style="display: none !important">${SECRET}</p>`],
+      ['style with other declarations, spaces and capitals', `<p style="color:#fff; Display :  NONE ; margin:0">${SECRET}</p>`],
+      ['style="visibility:hidden"', `<p style="visibility:hidden">${SECRET}</p>`],
+      ['style="VISIBILITY: HIDDEN;"', `<p style="VISIBILITY: HIDDEN;">${SECRET}</p>`],
+      ['style="width:0"', `<p style="width:0">${SECRET}</p>`],
+      ['style="height: 0px; overflow: hidden"', `<p style="height: 0px; overflow: hidden">${SECRET}</p>`],
+      ['style="font-size:0"', `<p style="font-size:0">${SECRET}</p>`],
+      ['style="font-size: 0.0em"', `<p style="font-size: 0.0em">${SECRET}</p>`],
+      ['<template>', `<template><p>${SECRET}</p></template>`],
+      ['<noscript>', `<noscript><p>${SECRET}</p></noscript>`],
+      ['a hidden ancestor', `<section style="display:none"><div><ul><li>${SECRET}</li></ul></div></section>`],
+      ['a hidden heading', `<h1 hidden>${SECRET}</h1>`],
+      ['a hidden link label', `<a href="/x" style="display:none">${SECRET}</a>`],
+      ['a hidden nav', `<nav hidden><a href="/x">${SECRET}</a></nav>`],
+      ['a hidden footer', `<footer aria-hidden="true">${SECRET}</footer>`],
+      ['the alt text of a hidden image', `<img src="a.png" alt="${SECRET}" style="display:none">`],
+    ])('%s: the words are not in the text or in what can be quoted', (_, inner) => {
+      const p = page(inner)
+      expect(p.text).toContain('Seen by everyone on the page.')
+      expect(p.text).not.toContain('Rated 10/10')
+      expect(JSON.stringify(p.segments)).not.toContain('Rated 10/10')
+    })
+
+    // THE LIMIT, stated in the code too: only the markup is read. A stylesheet or a script can hide text and
+    // this cannot know. These cases document that, and show the rule above is not simply dropping everything.
+    it.each([
+      ['plain visible markup', `<p>${SECRET}</p>`],
+      ['aria-hidden="false"', `<p aria-hidden="false">${SECRET}</p>`],
+      ['style="display:block"', `<p style="display:block">${SECRET}</p>`],
+      ['style="max-height:0"', `<p style="max-height:0">${SECRET}</p>`],
+      ['style="line-height:0"', `<p style="line-height:0">${SECRET}</p>`],
+      ['style="width:0.5em"', `<p style="width:0.5em">${SECRET}</p>`],
+      ['style="height:100px; min-width:0"', `<p style="height:100px; min-width:0">${SECRET}</p>`],
+      ['NOT DETECTED: hidden by a class in a stylesheet', `<style>.h{display:none}</style><p class="h">${SECRET}</p>`],
+      ['NOT DETECTED: hidden off-screen by inline position', `<p style="position:absolute; left:-9999px">${SECRET}</p>`],
+    ])('%s: the words ARE read', (_, inner) => {
+      expect(page(inner).text).toContain(SECRET)
+    })
+
+    it('facts are still read from the whole document: a phone link inside a hidden menu counts as a phone link', () => {
+      const p = page('<nav hidden><a href="tel:+15550100">Call us</a></nav>')
+      expect(p.facts.hasPhoneLink).toBe(true)
+      expect(p.text).not.toContain('Call us')
+    })
+  })
+
+  describe('segments: the page\'s own words, apart from our labels', () => {
+    it('every segment is exactly the slice of the text it points at, and none carries a label, a separator or the marker', () => {
+      const p = extractPage(html, 'https://x.example.test/')
+      expect(p.segments.length).toBeGreaterThan(8)
+      for (const segment of p.segments) {
+        expect(p.text.slice(segment.start, segment.start + segment.value.length)).toBe(segment.value)
+        expect(segment.value).not.toMatch(/^(Title|Meta Description|Main Heading \(H1\)|Section Headings \(H2\)|Subsection Headings \(H3\)|Navigation|Content|Links and Buttons|Image Alt Text|Footer): /)
+        expect(segment.value).not.toContain(' | ')
+        expect(segment.value).not.toContain('\n')
+      }
+      const values = p.segments.map((s) => s.value)
+      expect(values).toContain('Garrett Plumbing')
+      expect(values).toContain('Family plumbers.')
+      expect(values).toContain('Plumbing done right')
+      expect(values).toContain('A van')
+      // list fields are one segment per item, so a quote cannot run across our " | "
+      expect(values).toContain('Get a quote')
+      // the labels are in the text that is sent, and in no segment
+      expect(p.text).toContain('Title: Garrett Plumbing\nMeta Description: Family plumbers.\nMain Heading (H1): Plumbing done right')
+    })
+
+    it('when a page is cut, the segments are cut with it: nothing past the cut, and not the marker', () => {
+      const long = extractPage(`<html><head><title>Long</title></head><body><p>${'word '.repeat(5000)}</p><footer>The footer was cut off</footer></body></html>`, 'https://x.example.test/')
+      expect(long.truncated).toBe(true)
+      const end = long.text.length - TRUNCATION_MARKER.length - 1
+      for (const segment of long.segments) {
+        expect(segment.start + segment.value.length).toBeLessThanOrEqual(end)
+        expect(long.text.slice(segment.start, segment.start + segment.value.length)).toBe(segment.value)
+        expect(segment.value).not.toContain(TRUNCATION_MARKER)
+      }
+      expect(JSON.stringify(long.segments)).not.toContain('The footer was cut off')
+    })
+  })
+
   it('caps a long page with a visible marker and says it was cut', () => {
     const page = extractPage(`<html><body><p>${'word '.repeat(5000)}</p></body></html>`, 'https://x.example.test/')
     expect(PAGE_TEXT_CAP).toBe(12_000)

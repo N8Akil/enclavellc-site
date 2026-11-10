@@ -63,7 +63,7 @@ export const auditFixture = {
     },
     { name: 'Performance', assessed: false, reason: NOT_ASSESSED_SENTENCE },
   ],
-  topStrengths: [{ title: 'Clear offer', description: 'Fixture.' }],
+  topStrengths: [{ title: 'Clear offer', description: 'Fixture.', evidence: { pageUrl: `${SITE}/`, quote: 'We fix leaks and drains across the county' } }],
   criticalIssues: [
     { title: 'No booking path', description: 'Fixture.', impact: 'Fixture.', evidence: { pageUrl: `${SITE}/`, absent: 'a meta description' } },
   ],

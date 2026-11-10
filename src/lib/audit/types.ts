@@ -35,6 +35,14 @@ export interface FetchedPage {
   text: string;
   truncated: boolean;
   facts: PageFacts;
+  // the page's OWN words inside `text` (no label, separator or marker of ours), each with where it starts.
+  // Quotes are checked against these and nothing else.
+  segments: PageSegment[];
+}
+
+export interface PageSegment {
+  start: number;
+  value: string;
 }
 
 export interface WebsiteContent {
@@ -42,8 +50,9 @@ export interface WebsiteContent {
   pages: FetchedPage[];
 }
 
-// Where a finding comes from: words copied from a page that was read, or something looked for and not found.
-// `siteWide` marks an absence checked across every page read (pageUrl is then whichever page the model named).
+// What a finding rests on. Either the page's own words, checked against the page; or something the CODE looked
+// for in the page's HTML and did not find (`absent` is a label written in run-audit.ts for a fact id, never the
+// model's words). `siteWide` marks an absence checked across every page read.
 export type Evidence =
   | { pageUrl: string; quote: string }
   | { pageUrl: string; absent: string; siteWide?: boolean };
@@ -77,6 +86,7 @@ export type CategoryResult = AssessedCategory | UnassessedCategory;
 export interface Strength {
   title: string;
   description: string;
+  evidence: Evidence;
 }
 
 export interface CriticalIssue {

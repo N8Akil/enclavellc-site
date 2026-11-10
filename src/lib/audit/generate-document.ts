@@ -304,13 +304,17 @@ export async function generateAuditDocument(
           heading: HeadingLevel.HEADING_2,
           children: [new TextRun("Top Strengths")]
         }),
-        ...topStrengths.map(s => new Paragraph({
-          numbering: { reference: "bullet-list", level: 0 },
-          children: [
-            new TextRun({ text: s.title + ": ", bold: true }),
-            new TextRun(s.description)
-          ]
-        })),
+        ...topStrengths.flatMap(s => [
+          new Paragraph({
+            numbering: { reference: "bullet-list", level: 0 },
+            spacing: { after: 40 },
+            children: [
+              new TextRun({ text: s.title + ": ", bold: true }),
+              new TextRun(s.description)
+            ]
+          }),
+          evidenceParagraph(s.evidence),
+        ]),
 
         // Critical Issues
         new Paragraph({

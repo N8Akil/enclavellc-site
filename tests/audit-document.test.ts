@@ -35,7 +35,10 @@ const results: AuditResults = {
     { key: 'trust_signals', name: 'Trust Signals', assessed: true, score: 9, status: 'Excellent', weight: 0.2, findings: [{ text: 'Address shown.', evidence: { pageUrl: `${SITE}/contact?x=1`, quote: '12 Main Street' } }], recommendations: [] },
     ...UNASSESSED_CATEGORIES.map((name) => ({ name, assessed: false as const, reason: NOT_ASSESSED_SENTENCE })),
   ],
-  topStrengths: [{ title: 'Clear offer', description: 'Said in the first line.' }],
+  topStrengths: [
+    { title: 'Clear offer', description: 'Said in the first line.', evidence: { pageUrl: `${SITE}/`, quote: 'We fix <b>leaks</b> & drains across the county' } },
+    { title: 'Secure address', description: 'Nothing missing here.', evidence: { pageUrl: `${SITE}/about`, quote: 'Serving the county since 1998 with care' } },
+  ],
   criticalIssues: [{ title: 'No meta description', description: 'Search shows arbitrary text.', impact: 'Fewer clicks.', evidence: { pageUrl: `${SITE}/about`, absent: 'a meta description' } }],
   actionPlan: { quickWins: ['Write it.'], shortTerm: ['Review titles.'], strategic: ['Plan pages.'] },
   pagesRead: [`${SITE}/`, `${SITE}/about`, `${SITE}/contact?x=1`],
@@ -75,6 +78,9 @@ describe('the wording helpers', () => {
     expect(text).toContain('3 public pages')
     for (const name of UNASSESSED_CATEGORIES) expect(text).toContain(name)
     expect(text).toContain('does not compare your site with competitors')
+    // [2f] the limit of a text read is said out loud
+    expect(text).toContain('Text the page hides in its own markup is not read.')
+    expect(text).toContain('Each finding, strength and priority issue shows the words from your page that it rests on')
     expect(text).not.toContain('!')
   })
 })
@@ -121,7 +127,10 @@ describe('generateAuditDocument', () => {
     expect(lines[lines.indexOf('No description for search.') + 1]).toBe('Looked for: a meta description, not found on /about')
     expect(lines[lines.indexOf('No phone link.') + 1]).toBe('Looked for: a clickable phone link (tel:), not found on any page read')
     expect(lines).toContain('On /contact?x=1: “12 Main Street”')
-    // and under the priority issue
+    // [2e] and under every strength and every priority issue: the reader is the check
+    expect(lines[lines.indexOf('Clear offer: Said in the first line.') + 1]).toBe('On /: \u201CWe fix <b>leaks</b> & drains across the county\u201D')
+    expect(lines[lines.indexOf('Secure address: Nothing missing here.') + 1]).toBe('On /about: \u201CServing the county since 1998 with care\u201D')
+    expect(xml).not.toContain('<b>leaks</b>')
     expect(lines[lines.indexOf('No meta description: Search shows arbitrary text.') + 1]).toBe('Looked for: a meta description, not found on /about')
 
     // how it was made, and what it does not cover

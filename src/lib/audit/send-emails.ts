@@ -91,7 +91,9 @@ function generateUserEmailHtml(
       ? `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.score)} of 10</li>`
       : `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.reason)}</li>`
   );
-  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s => escapeHtml(s.title));
+  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s =>
+    `${escapeHtml(s.title)}<br><span style="color: #666666; font-size: 13px;">${escapeHtml(evidenceLine(s.evidence))}</span>`
+  );
   const name = escapeHtml(userName || 'there');
   const site = escapeHtml(websiteUrl);
 
@@ -236,7 +238,7 @@ function generateAdminEmailHtml(
         <table role="presentation" style="width: 100%;">
           <tr>
             <td style="padding: 10px 0;">
-              <strong>Website:</strong> <a href="${site}" style="color: #2874A6;">${site}</a>
+              <strong>Website:</strong> ${site}
             </td>
           </tr>
           <tr>
