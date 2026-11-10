@@ -9,6 +9,7 @@ import { auditSetting } from './env';
 export const PREVIEW_MESSAGE =
   "Thanks. We're rebuilding the free audit this week, so Nate will run yours by hand and email it to you himself.";
 export const PREVIEW_LEAD_LINE = 'Audit requested while the free audit is in preview: run it by hand.';
+export const CEILING_LEAD_LINE = "Audit requested after today's audit limit was reached: run it by hand.";
 
 export function isPreviewEmail(email: string, list: string | undefined = auditSetting('AUDIT_PREVIEW_EMAILS')): boolean {
   try {
@@ -31,6 +32,8 @@ export async function sendPreviewLead(lead: {
   userName?: string;
   websiteUrl: string;
   adminEmail: string;
+  // why this is a lead and not a report; one of the fixed lines above
+  line?: string;
 }): Promise<{ sent: true } | { sent: false; error: string }> {
   // everything below comes from the visitor: escape it
   const site = escapeHtml(lead.websiteUrl);
@@ -41,7 +44,7 @@ export async function sendPreviewLead(lead: {
 <html>
 <head><meta charset="utf-8"><title>Audit request</title></head>
 <body style="margin: 0; padding: 20px; font-family: Arial, sans-serif; color: #333333;">
-  <p><strong>${escapeHtml(PREVIEW_LEAD_LINE)}</strong></p>
+  <p><strong>${escapeHtml(lead.line ?? PREVIEW_LEAD_LINE)}</strong></p>
   <p><strong>Website:</strong> ${site}</p>
   <p><strong>Email:</strong> ${email}</p>
   <p><strong>Name:</strong> ${name}</p>

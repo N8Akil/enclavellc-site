@@ -12,6 +12,7 @@
 //   - 5 audits per email address per day     (sliding 24 h window)
 //   - 100 audits per hour across everyone    (sliding window)
 //   - 30 audits started per UTC day, or AUDIT_DAILY_LIMIT if it is a positive integer
+//   - 200 lead emails per UTC day (a request that is not run automatically; it never uses the 30)
 //
 // Nothing here is logged. Keys are SHA-256 hashes of the IP and of the lower-cased email, and a key is
 // dropped as soon as its window has passed.
@@ -24,7 +25,7 @@
 
 import cluster from 'node:cluster';
 import { createHash } from 'node:crypto';
-import { DEFAULT_DAILY_LIMIT, RATE_LIMITS } from './config';
+import { DEFAULT_DAILY_LIMIT, LEAD_DAILY_LIMIT, RATE_LIMITS } from './config';
 import { auditSetting } from './env';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -48,6 +49,9 @@ export interface AuditLimiterOptions {
   dailyLimit?: () => number;
   // the daily counter; injectable so a test can put it in a broken state
   dailyState?: DailyState;
+  // the daily lead-mail counter and its cap; injectable for the same reason
+  leadState?: DailyState;
+  leadLimit?: number;
 }
 
 // A positive integer, or the default. "0", "-1", "3.5", "ten", "" and undefined all fall back.
@@ -77,6 +81,8 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
   const dailyLimit = options.dailyLimit ?? (() => parseDailyLimit(auditSetting('AUDIT_DAILY_LIMIT')));
   const daily: DailyState = options.dailyState ?? { day: -1, count: 0 };
   const isClusterWorker = options.isClusterWorker ?? (() => cluster.isWorker);
+  const leads: DailyState = options.leadState ?? { day: -1, count: 0 };
+  const leadLimit = options.leadLimit ?? LEAD_DAILY_LIMIT;
   const byIp = new Map<string, number[]>();
   const byEmail = new Map<string, number[]>();
   let globalHits: number[] = [];
@@ -91,7 +97,9 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
   const retryAfter = (oldest: number, windowMs: number, t: number) =>
     Math.max(1, Math.ceil((oldest + windowMs - t) / 1000));
 
-  function decide(ip: string, email: string): LimitDecision {
+  // audit: true takes one of the day's audit slots; false is a request that will not be run automatically (it
+  // becomes a lead), which must pass the per-person and hourly limits but never uses the audit ceiling.
+  function decide(ip: string, email: string, audit: boolean): LimitDecision {
     // These counts are only the real limits in ONE process. The site's PM2 entry was made by hand (fork mode, one
     // instance, read on the server 2026-11-10); if it is ever started in cluster mode every worker would keep its own
     // counts and each limit would multiply. So a cluster worker refuses outright instead of counting: fail closed.
@@ -131,7 +139,7 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
     if (globalHits.length >= RATE_LIMITS.global_hourly) {
       return { allowed: false, cause: 'global', retryAfterSeconds: retryAfter(globalHits[0], HOUR_MS, t) };
     }
-    if (daily.count >= limit) {
+    if (audit && daily.count >= limit) {
       return { allowed: false, cause: 'daily', retryAfterSeconds: Math.max(1, Math.ceil(((today + 1) * DAY_MS - t) / 1000)) };
     }
 
@@ -139,18 +147,43 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
     byIp.set(ipKey, [...ipHits, t]);
     byEmail.set(emailKey, [...emailHits, t]);
     globalHits.push(t);
-    daily.count += 1;
+    if (audit) daily.count += 1;
     return { allowed: true };
+  }
+
+  // One lead email to the admin address. Its own daily cap, counted here; fails closed like the audit ceiling.
+  function takeLeadSlot(): boolean {
+    if (isClusterWorker()) return false;
+    const t = now();
+    if (!Number.isFinite(t)) return false;
+    if (!Number.isSafeInteger(leadLimit) || leadLimit < 1) return false;
+    if (!Number.isSafeInteger(leads.day) || leads.day < -1 || !Number.isSafeInteger(leads.count) || leads.count < 0) return false;
+    const today = Math.floor(t / DAY_MS);
+    if (today > leads.day) {
+      leads.day = today;
+      leads.count = 0;
+    }
+    if (leads.count >= leadLimit) return false;
+    leads.count += 1;
+    return true;
   }
 
   return {
     // Checks every limit and, when all pass, counts the attempt. A refused attempt is not counted.
-    check(ip: string, email: string): LimitDecision {
+    check(ip: string, email: string, options: { audit?: boolean } = {}): LimitDecision {
       try {
-        return decide(ip, email);
+        return decide(ip, email, options.audit !== false);
       } catch {
         // fail closed
         return { allowed: false, cause: 'daily' };
+      }
+    },
+    // May one more lead email go to the admin address today? Counts it when the answer is yes.
+    takeLead(): boolean {
+      try {
+        return takeLeadSlot();
+      } catch {
+        return false;
       }
     },
     // for tests
@@ -160,6 +193,8 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
       globalHits = [];
       daily.day = -1;
       daily.count = 0;
+      leads.day = -1;
+      leads.count = 0;
     },
     // how many keys are held right now (for the "nothing is kept past its window" test)
     size() {
@@ -177,3 +212,7 @@ export const RATE_LIMIT_MESSAGES: Record<LimitCause, string> = {
   global: "The free audit has reached its limit for today. Please email n.garrett@enclavellc.net and we'll run yours by hand.",
   daily: "The free audit has reached its limit for today. Please email n.garrett@enclavellc.net and we'll run yours by hand.",
 };
+
+// Said instead of the daily sentence above when the visitor's request was passed on as a lead: they need do nothing more.
+export const CEILING_LEAD_MESSAGE =
+  'The free audit has reached its limit for today. Nate has your request and will run yours by hand.';

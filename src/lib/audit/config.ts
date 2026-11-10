@@ -82,6 +82,11 @@ export const RATE_LIMITS = {
 // Audits started per UTC day, unless AUDIT_DAILY_LIMIT overrides it.
 export const DEFAULT_DAILY_LIMIT = 30;
 
+// Lead emails to the admin address per UTC day (a request that is not run automatically becomes a lead for a person).
+// A lead spends nothing, so it never uses the audit ceiling above; this separate, generous cap only stops the form
+// being used to flood one inbox.
+export const LEAD_DAILY_LIMIT = 200;
+
 // Outbound fetch limits (safe-fetch.ts).
 export const FETCH_TIMEOUT_MS = 10_000;
 export const FETCH_MAX_BYTES = 2 * 1024 * 1024;

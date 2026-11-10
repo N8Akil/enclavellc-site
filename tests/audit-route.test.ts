@@ -244,27 +244,82 @@ describe('POST /api/audit/generate', () => {
       expectNoPii(logs, { includeLog: true })
     })
 
-    it('the daily ceiling turns the form off honestly, and it comes back at the UTC day change', async () => {
+    const CEILING_LEAD = 'The free audit has reached its limit for today. Nate has your request and will run yours by hand.'
+    const audits = () => vi.mocked(runAudit).mock.calls.length
+
+    it('the daily AUDIT ceiling is used only by requests that run an audit; past it a listed request becomes a lead; it comes back at the UTC day change', async () => {
       vi.useFakeTimers({ toFake: ['Date'] })
       vi.setSystemTime(new Date('2026-11-10T23:00:00Z'))
       vi.stubEnv('AUDIT_DAILY_LIMIT', '2')
-      for (let i = 0; i < 2; i++) expect((await POST(postJson(URL_, visitor(i), from(`203.0.113.${i}`)))).status).toBe(202)
+      // visitors who are not on the list spend nothing and never use the ceiling, however many there are
+      for (let i = 0; i < 5; i++) expect((await POST(postJson(URL_, visitor(i), from(`203.0.113.${i}`)))).status).toBe(202)
+      expect(audits()).toBe(0)
+      // two real audits use the day's two slots
+      for (const ip of ['203.0.113.50', '203.0.113.51']) expect((await POST(postJson(URL_, body, from(ip)))).status).toBe(200)
+      expect(audits()).toBe(2)
       send.mockClear()
-      expect(await expect429(await POST(postJson(URL_, visitor(3), from('203.0.113.3'))), LIMIT_REACHED)).toBe(3600)
-      // also for the address on the preview list: the ceiling is ahead of everything
-      await expect429(await POST(postJson(URL_, body, from('203.0.113.4'))), LIMIT_REACHED)
-      expectNothingRan()
-      expect(send).not.toHaveBeenCalled()
-      expect(loggedText(logs.warn)).toMatch(/rate limited: daily/)
+
+      // the third listed request is not run, is told so, and its lead still reaches a person
+      const res = await POST(postJson(URL_, body, from('203.0.113.52')))
+      expect(res.status).toBe(429)
+      expect(Number(res.headers.get('Retry-After'))).toBe(3600)
+      expect(await res.json()).toEqual({ success: false, error: 'RATE_LIMITED', leadSent: true, message: CEILING_LEAD })
+      expect(audits()).toBe(2)
+      expect(send).toHaveBeenCalledTimes(1)
+      expect(send.mock.calls[0][0].html).toContain('Audit requested after today&#39;s audit limit was reached: run it by hand.')
+      expect(send.mock.calls[0][0].attachments).toBeUndefined()
+      expect(loggedText(logs.warn)).toMatch(/rate limited: daily \(lead passed on\)/)
+
+      // a visitor who is not on the list is unaffected by the used-up ceiling
+      expect((await POST(postJson(URL_, visitor(9), from('203.0.113.9')))).status).toBe(202)
+      expectNoPii(logs, { includeLog: true })
 
       vi.setSystemTime(new Date('2026-11-11T00:00:00Z'))
-      expect((await POST(postJson(URL_, body, from('203.0.113.4')))).status).toBe(200)
+      expect((await POST(postJson(URL_, body, from('203.0.113.53')))).status).toBe(200)
+      expect(audits()).toBe(3)
     })
 
-    it.each(['0', '-1', 'lots', '2.5', ''])('an unusable AUDIT_DAILY_LIMIT (%j) falls back to 30', async (value) => {
+    it('if that lead cannot be sent, the visitor is told to write in (nobody knows they asked)', async () => {
+      vi.stubEnv('AUDIT_DAILY_LIMIT', '1')
+      expect((await POST(postJson(URL_, body, from('203.0.113.60')))).status).toBe(200)
+      send.mockResolvedValue(resendErr())
+      const res = await POST(postJson(URL_, body, from('203.0.113.61')))
+      expect(res.status).toBe(502)
+      expect((await res.json()).message).toBe('We could not pass your request on. Please contact n.garrett@enclavellc.net.')
+      expect(audits()).toBe(1)
+    })
+
+    it.each(['0', '-1', 'lots', '2.5', ''])('an unusable AUDIT_DAILY_LIMIT (%j) falls back to 30 audits', async (value) => {
       vi.stubEnv('AUDIT_DAILY_LIMIT', value)
-      for (let i = 0; i < 30; i++) expect((await POST(postJson(URL_, visitor(i), from(`198.51.100.${i}`)))).status).toBe(202)
-      await expect429(await POST(postJson(URL_, visitor(31), from('198.51.100.31'))), LIMIT_REACHED)
+      const listed = Array.from({ length: 31 }, (_, i) => `listed${i}@pii-list.example.test`)
+      vi.stubEnv('AUDIT_PREVIEW_EMAILS', listed.join(','))
+      for (let i = 0; i < 30; i++) expect((await POST(postJson(URL_, { ...body, userEmail: listed[i] }, from(`198.51.100.${i}`)))).status).toBe(200)
+      const res = await POST(postJson(URL_, { ...body, userEmail: listed[30] }, from('198.51.100.31')))
+      expect(res.status).toBe(429)
+      expect((await res.json()).message).toBe(CEILING_LEAD)
+      expect(audits()).toBe(30)
+    })
+
+    it('lead emails have their own daily cap (200): the 201st lead of a day is refused and sends nothing; audits are untouched by it', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.stubEnv('AUDIT_DAILY_LIMIT', '1000')
+      let n = 0
+      // 100 an hour is the global limit, so the 200 leads take two separate hours of one UTC day
+      for (const hour of ['2026-11-10T01:00:00Z', '2026-11-10T03:00:00Z']) {
+        vi.setSystemTime(new Date(hour))
+        for (let i = 0; i < 100; i++, n++) expect((await POST(postJson(URL_, visitor(n), from(`198.18.${Math.floor(n / 200)}.${n % 200}`)))).status).toBe(202)
+      }
+      expect(send).toHaveBeenCalledTimes(200)
+      vi.setSystemTime(new Date('2026-11-10T05:00:00Z'))
+      send.mockClear()
+      await expect429(await POST(postJson(URL_, visitor(999), from('198.19.0.1'))), LIMIT_REACHED)
+      expect(send).not.toHaveBeenCalled()
+      expect(loggedText(logs.warn)).toMatch(/rate limited: lead cap/)
+      // a real audit still runs: the lead cap is not the audit ceiling
+      expect((await POST(postJson(URL_, body, from('198.19.0.2')))).status).toBe(200)
+      // and the lead cap comes back the next UTC day
+      vi.setSystemTime(new Date('2026-11-11T00:30:00Z'))
+      expect((await POST(postJson(URL_, visitor(1000), from('198.19.0.3')))).status).toBe(202)
     })
 
     it('the global limit: the 101st request in an hour is 429 with the "limit for today" wording', async () => {

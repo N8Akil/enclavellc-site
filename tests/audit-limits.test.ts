@@ -218,3 +218,38 @@ describe('more than one process', () => {
     expect(limiter.check('203.0.113.10', 'b@example.com')).toEqual({ allowed: true })
   })
 })
+
+describe('requests that are not run automatically, and the lead cap', () => {
+  const at = Date.UTC(2026, 10, 10, 12)
+  it('check(…, { audit: false }) passes the per-person and hourly limits but never uses the audit ceiling', () => {
+    const limiter = createAuditLimiter({ now: () => at, dailyLimit: () => 1 })
+    for (let i = 0; i < 10; i++) expect(limiter.check(`203.0.113.${i}`, `v${i}@example.com`, { audit: false })).toEqual({ allowed: true })
+    // the one audit slot of the day is still there
+    expect(limiter.check('203.0.113.100', 'a@example.com')).toEqual({ allowed: true })
+    expect(limiter.check('203.0.113.101', 'b@example.com')).toMatchObject({ allowed: false, cause: 'daily' })
+    // and a non-audit request is still allowed after the ceiling is used up
+    expect(limiter.check('203.0.113.102', 'c@example.com', { audit: false })).toEqual({ allowed: true })
+    // the per-IP limit still binds it (3 an hour)
+    for (let i = 0; i < 2; i++) limiter.check('203.0.113.200', `w${i}@example.com`, { audit: false })
+    limiter.check('203.0.113.200', 'w2@example.com', { audit: false })
+    expect(limiter.check('203.0.113.200', 'w3@example.com', { audit: false })).toMatchObject({ allowed: false, cause: 'ip' })
+  })
+  it('takeLead allows exactly the cap per UTC day and comes back the next day', () => {
+    let t = at
+    const limiter = createAuditLimiter({ now: () => t, leadLimit: 3 })
+    expect([limiter.takeLead(), limiter.takeLead(), limiter.takeLead(), limiter.takeLead()]).toEqual([true, true, true, false])
+    t = Date.UTC(2026, 10, 11, 0, 0, 1)
+    expect(limiter.takeLead()).toBe(true)
+  })
+  it('takeLead fails closed: a bad clock, a counter this code did not write, a bad cap, or a cluster worker all refuse', () => {
+    expect(createAuditLimiter({ now: () => NaN }).takeLead()).toBe(false)
+    expect(createAuditLimiter({ now: () => at, leadState: { day: 1.5, count: 0 } }).takeLead()).toBe(false)
+    expect(createAuditLimiter({ now: () => at, leadState: { day: -1, count: -4 } }).takeLead()).toBe(false)
+    expect(createAuditLimiter({ now: () => at, leadLimit: 0 }).takeLead()).toBe(false)
+    expect(createAuditLimiter({ now: () => at, isClusterWorker: () => true }).takeLead()).toBe(false)
+    expect(createAuditLimiter({ now: () => { throw new Error('clock') } }).takeLead()).toBe(false)
+    // control: the same call with nothing wrong is allowed
+    expect(createAuditLimiter({ now: () => at }).takeLead()).toBe(true)
+  })
+})
+
