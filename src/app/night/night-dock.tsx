@@ -62,7 +62,7 @@ export function NightDock() {
     <div className={show ? 'dock show' : 'dock'} role="region" aria-label="Start here" inert={!show}>
       {host
         ? <p><b>{host}</b><span> has a free audit waiting. Add your email.</span></p>
-        : <p><b>Free site audit.</b><span> A plain-language report, in your inbox in a few minutes.</span></p>}
+        : <p><b>Free site audit.</b><span> A plain-language report, sent to your inbox.</span></p>}
       <button className="btn gold" type="button" onClick={toAudit}>{host ? 'Finish the audit' : 'Get the audit'}</button>
       <button className="link" type="button" onClick={toBook}>or request a call</button>
     </div>

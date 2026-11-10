@@ -100,7 +100,8 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
 
       if (data.success) {
         setStatus('success')
-        setResultMessage(`Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
+        // while the free audit is in preview the API says what will really happen: show its words, not ours
+        setResultMessage(data.preview && typeof data.message === 'string' ? data.message : `Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
         reset()
         shareTypedUrl('')
       } else {
@@ -127,7 +128,7 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
         </div>
         <div className="hero-go">
           <button className="btn gold" type="submit" disabled={loading}>Send my free audit</button>
-          <p className={isErr ? 'note err' : 'note'} id="auditHeroNote" role="status">{note || 'Free. A plain-language report, in your inbox in a few minutes.'}</p>
+          <p className={isErr ? 'note err' : 'note'} id="auditHeroNote" role="status">{note || 'Free. A plain-language report, sent to your inbox.'}</p>
         </div>
       </form>
     )

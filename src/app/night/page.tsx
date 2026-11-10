@@ -131,7 +131,7 @@ export default function NightPage() {
 
         <section className="sec report-sec" id="report" aria-labelledby="report-h">
           <div className="wrap">
-            <div className="head rv"><SecSlate scene="02" loc="The report" /><h2 className="h2" id="report-h">What the audit hands you</h2><p>The free audit is a written report, sent to your inbox as a document you can forward. It is generated automatically from your site&apos;s public pages. Here is what is inside.</p></div>
+            <div className="head rv"><SecSlate scene="02" loc="The report" /><h2 className="h2" id="report-h">What the audit hands you</h2><p>The free audit is a written report, sent to your inbox as a document you can forward. It is written from your site&apos;s public pages. Here is what is inside.</p></div>
             <div className="report rv">
               <div className="sheet" aria-hidden="true">
                 <span className="mono">Enclave · website audit report</span>
@@ -148,7 +148,7 @@ export default function NightPage() {
                 <li><h3>Action plan</h3><p>Quick wins for this week, then one to four weeks, then one to three months.</p></li>
               </ol>
             </div>
-            <div className="report-go"><a className="btn gold" href="#audit">Send my web address</a><span className="mono">Free · in your inbox in a few minutes</span></div>
+            <div className="report-go"><a className="btn gold" href="#audit">Send my web address</a><span className="mono">Free · sent to your inbox</span></div>
           </div>
         </section>
 
@@ -195,7 +195,7 @@ export default function NightPage() {
           <div className="wrap">
             <div className="head rv"><SecSlate scene="05" loc="Production board" /><h2 className="h2" id="how-h">The shooting schedule</h2><p>Five scenes on the board, and the founder is on set for every one.</p></div>
             <ol className="steps rv">
-              <li><h3>Free audit</h3><p>Send your web address. The report is generated automatically and emailed to you.</p></li>
+              <li><h3>Free audit</h3><p>Send your web address. The report is emailed to you.</p></li>
               <li><h3>Call with the founder</h3><p>We talk through your business and goals.</p></li>
               <li><h3>Plan and quote</h3><p>Amun maps the work. You get one clear price.</p></li>
               <li><h3>Build</h3><p>The crew builds. Osiris checks everything before you see it.</p></li>
@@ -231,7 +231,7 @@ export default function NightPage() {
           <div className="wrap end" id="book" tabIndex={-1}>
             <div className="end-copy">
               <h2 id="end-h">Your scene is next.</h2>
-              <p>Request a call and Nate replies to you himself. Or start with the free audit: that report is generated automatically and arrives by email in a few minutes.</p>
+              <p>Request a call and Nate replies to you himself. Or start with the free audit: that report arrives by email.</p>
               <NightBook />
             </div>
             <NightAuditForm />
