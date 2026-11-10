@@ -1418,6 +1418,30 @@ describe('[RULE 10] the model writes no number of its own', () => {
     expect(proseNumbersOk(results('4 of 18 links fail.'))).toBe(false)
     expect(proseNumbersOk(results('1,800 links fail.'))).toBe(false)
   })
+
+  it('proseNumbersOk: heading names (H1, H2) are not numbers, so they need no source in the evidence', () => {
+    const results = (line: string) =>
+      ({
+        whereYouStand: 'Plain words.',
+        working: [],
+        fixes: [],
+        areas: [{ key: 'trust', name: 'Trust', assessed: true, score: 6, status: 'Needs Improvement', weight: 0.15, line, findings: [{ text: 'Heading.', evidence: { kind: 'quote', quote: 'Caring for Dayton families' } }] }],
+      }) as unknown as AuditResults
+    expect(proseNumbersOk(results('Your H1 says it, and the H2 repeats it.'))).toBe(true)
+  })
+
+  it('proseNumbersOk: a digit run followed by letters is still a number (3MB, 5s, 92%, 7/10)', () => {
+    const results = (line: string) =>
+      ({
+        whereYouStand: 'Plain words.',
+        working: [],
+        fixes: [],
+        areas: [{ key: 'trust', name: 'Trust', assessed: true, score: 6, status: 'Needs Improvement', weight: 0.15, line, findings: [{ text: 'Heading.', evidence: { kind: 'quote', quote: 'Caring for Dayton families' } }] }],
+      }) as unknown as AuditResults
+    for (const line of ['The photo is 3MB.', 'It loads in 5s.', '92% of visitors leave.', 'You score 7/10.']) {
+      expect(proseNumbersOk(results(line))).toBe(false)
+    }
+  })
 })
 
 describe('[P3-3, P3-4, P3-5] quotes: one block, the page\'s literal words, and First impression from the home page', () => {

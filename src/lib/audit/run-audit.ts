@@ -532,14 +532,15 @@ function isHomeFact(fact: Fact, context: EvidenceContext): boolean {
 // Numbers in the model's own words
 // ---------------------------------------------------------------------------------------------------------------
 
-// Every number written with digits ("92", "4.5", "1,200"), commas removed.
-const numbersIn = (text: string): string[] => (text.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) => n.replace(/,/g, ''));
+// Every number written with digits ("92", "4.5", "1,200", "3MB"), commas removed. A digit run that directly follows a
+// letter is a name, not a number ("H1", "h2", "v2").
+const numbersIn = (text: string): string[] => (text.match(/(?<![A-Za-z\d])\d+(?:[.,]\d+)*/g) ?? []).map((n) => n.replace(/,/g, ''));
 const evidenceText = (evidence: Evidence): string =>
   evidence.kind === 'quote' ? evidence.quote : evidence.kind === 'absent' ? evidence.label : evidence.kind === 'screen' ? '' : evidence.text;
 
 // THE MODEL WRITES NO NUMBER OF ITS OWN. Every digit in a printed piece of the model's prose must be a number that
 // is in the evidence printed beside that piece (a quote's words, a fact's or a measure's words, all written by the
-// page or by our code). where-you-stand cites nothing, so it may hold no digit at all; an area's line may use the
+// page or by our code; heading names like "H1" are not numbers). where-you-stand cites nothing, so it may hold no digit at all; an area's line may use the
 // numbers of that area's printed findings. Returns false at the first number that has no such source: the reply is
 // then refused like a schema miss. NOT covered: numbers written as words ("ten"), and the phone call-outs, which
 // exist only with a screenshot (nothing supplies one yet).
