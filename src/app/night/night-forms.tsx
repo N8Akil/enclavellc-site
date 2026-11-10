@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { currentSlate } from './night-coverage'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Free site audit. Mirrors src/components/website-audit-form.tsx: the same schema, the same POST to
@@ -28,13 +29,54 @@ const auditSchema = z.object({
 
 type AuditValues = z.infer<typeof auditSchema>
 
-export function NightAuditForm() {
+// A web address typed into either audit form is remembered for this tab only (sessionStorage; nothing is sent anywhere):
+// the other audit form, the dock and the end credits pick it up through the "nc:url" event, and it is cleared once an
+// audit is sent.
+const URL_KEY = 'nc-url'
+export const readTypedUrl = () => { try { return sessionStorage.getItem(URL_KEY) || '' } catch { return '' } }
+const shareTypedUrl = (v: string) => {
+  try { if (v) sessionStorage.setItem(URL_KEY, v); else sessionStorage.removeItem(URL_KEY) } catch {}
+  window.dispatchEvent(new CustomEvent('nc:url', { detail: v }))
+}
+// the host a visitor would recognise as theirs, or '' while what they have typed is not an address yet
+export const hostOf = (v: string) => {
+  try {
+    if (/[\s%]/.test(v)) return ''
+    const h = new URL(v.startsWith('http') ? v : `https://${v}`).hostname.replace(/^www\./, '')
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(h) && h.length <= 48 ? h : ''
+  } catch { return '' }
+}
+
+// variant 'hero' is the same form in the opening shot: website and email only. The name is optional in the schema and is
+// sent as '' there, which is what the full form sends when its Name field is left blank.
+export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }) {
+  const hero = variant === 'hero'
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [resultMessage, setResultMessage] = useState('')
 
-  const { register, handleSubmit, formState: { errors }, reset } = useForm<AuditValues>({
+  const { register, handleSubmit, formState: { errors, dirtyFields }, reset, setValue, getValues, watch } = useForm<AuditValues>({
     resolver: zodResolver(auditSchema),
+    defaultValues: { userName: '' },
   })
+
+  // what this form's address field holds is shared; an address typed in the other form fills this one while it is empty
+  // (only once the visitor has edited THIS field: a carried-over value is not dirty, so the empty form never clears the other's)
+  const typed = watch('websiteUrl')
+  const edited = !!dirtyFields.websiteUrl
+  useEffect(() => {
+    if (!edited) return
+    const v = (typed || '').trim()
+    const next = hostOf(v) ? v : ''
+    if (next !== readTypedUrl()) shareTypedUrl(next)
+  }, [typed, edited])
+  useEffect(() => {
+    // fills an empty field, follows the other form while this one is untouched, and empties with it
+    const fill = (v: string) => { if (!dirtyFields.websiteUrl && getValues('websiteUrl') !== v) setValue('websiteUrl', v) }
+    fill(readTypedUrl())
+    const onUrl = (e: Event) => fill((e as CustomEvent<string>).detail)
+    window.addEventListener('nc:url', onUrl)
+    return () => window.removeEventListener('nc:url', onUrl)
+  }, [getValues, setValue, dirtyFields.websiteUrl])
 
   const onSubmit = async (values: AuditValues) => {
     setStatus('loading')
@@ -60,6 +102,7 @@ export function NightAuditForm() {
         setStatus('success')
         setResultMessage(`Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
         reset()
+        shareTypedUrl('')
       } else {
         setStatus('error')
         setResultMessage(data.message || 'Something went wrong. Please try again.')
@@ -75,12 +118,27 @@ export function NightAuditForm() {
   const note = fieldError || (loading ? 'Analyzing & Sending...' : resultMessage)
   const isErr = !!fieldError || status === 'error'
 
+  if (hero) {
+    return (
+      <form className="audit hero-audit" id="audit-hero" aria-label="Free site audit" onSubmit={handleSubmit(onSubmit)} aria-busy={loading} noValidate>
+        <div className="hero-fields">
+          <label>Your website<input {...register('websiteUrl')} type="text" inputMode="url" autoComplete="url" placeholder="yourbusiness.com" required aria-invalid={!!errors.websiteUrl} disabled={loading} /></label>
+          <label>Where to send it<input {...register('userEmail')} type="email" autoComplete="email" placeholder="you@yourbusiness.com" required aria-invalid={!!errors.userEmail} disabled={loading} /></label>
+        </div>
+        <div className="hero-go">
+          <button className="btn gold" type="submit" disabled={loading}>Send my free audit</button>
+          <p className={isErr ? 'note err' : 'note'} id="auditHeroNote" role="status">{note || 'Free. A plain-language report, in your inbox in a few minutes.'}</p>
+        </div>
+      </form>
+    )
+  }
+
   return (
-    <form className="audit" id="audit" tabIndex={-1} aria-labelledby="audit-h" onSubmit={handleSubmit(onSubmit)} aria-busy={loading}>
+    <form className="audit" id="audit" tabIndex={-1} aria-labelledby="audit-h" onSubmit={handleSubmit(onSubmit)} aria-busy={loading} noValidate>
       <span className="k mono">Start here · free</span>
       <h3 id="audit-h">Free site audit</h3>
       <label>Website<input {...register('websiteUrl')} type="text" inputMode="url" autoComplete="url" placeholder="yourbusiness.com" required aria-invalid={!!errors.websiteUrl} disabled={loading} /></label>
-      <label>Name<input {...register('userName')} type="text" autoComplete="name" aria-invalid={!!errors.userName} disabled={loading} /></label>
+      <label>Name (optional)<input {...register('userName')} type="text" autoComplete="name" aria-invalid={!!errors.userName} disabled={loading} /></label>
       <label>Email<input {...register('userEmail')} type="email" autoComplete="email" required aria-invalid={!!errors.userEmail} disabled={loading} /></label>
       <button className="btn solid" type="submit" disabled={loading}>Send for the audit</button>
       <p className={isErr ? 'note err' : 'note'} id="auditNote" role="status">{note}</p>
@@ -89,7 +147,7 @@ export function NightAuditForm() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// "Book a call". There is no booking link yet, so the button opens a contact form. It mirrors
+// "Request a call" (was "Book a call": there is no booking link yet, so the label says what happens). It opens a contact form. It mirrors
 // src/components/contact-form.tsx: the same schema and default, the same POST of the raw values to /api/contact,
 // the same success (res.ok) message, and on failure the API's own error (or the same fallback address).
 // ---------------------------------------------------------------------------------------------------------------
@@ -108,7 +166,7 @@ export function NightBook() {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
 
-  const { register, handleSubmit, formState: { errors, isSubmitting }, reset } = useForm<ContactValues>({
+  const { register, handleSubmit, formState: { errors, isSubmitting }, reset, setValue } = useForm<ContactValues>({
     resolver: zodResolver(contactSchema),
     defaultValues: {
       service: 'Not sure yet',
@@ -139,6 +197,24 @@ export function NightBook() {
     }
   }
 
+  // "nc:book" (the coverage slate, the dock): open the form; a slate pick arrives as a draft message the visitor can edit
+  useEffect(() => {
+    const onBook = (e: Event) => {
+      const d = (e as CustomEvent<{ message?: string; service?: ContactValues['service'] }>).detail
+      if (d?.message) setValue('message', d.message, { shouldValidate: false })
+      if (d?.service) setValue('service', d.service)
+      setResult(null)
+      setOpen(true)
+      requestAnimationFrame(() => formRef.current?.querySelector<HTMLInputElement>('input')?.focus())
+    }
+    window.addEventListener('nc:book', onBook)
+    // plain "#book" links (the header button) open the form too, with whatever is on the slate
+    const links = [...document.querySelectorAll<HTMLAnchorElement>('.nc a[href="#book"]')]
+    const onLink = () => window.dispatchEvent(new CustomEvent('nc:book', { detail: currentSlate() ?? {} }))
+    links.forEach((a) => a.addEventListener('click', onLink))
+    return () => { window.removeEventListener('nc:book', onBook); links.forEach((a) => a.removeEventListener('click', onLink)) }
+  }, [setValue])
+
   // opening the form moves focus into it (focus scrolls it into view)
   useEffect(() => {
     if (open) formRef.current?.querySelector<HTMLInputElement>('input')?.focus()
@@ -153,11 +229,11 @@ export function NightBook() {
       <div className="bookbox">
         <button className="btn gold" id="bookLink" type="button" aria-expanded={open} aria-controls="contact"
           onClick={() => { if (open) formRef.current?.querySelector<HTMLInputElement>('input')?.focus(); else setOpen(true) }}>
-          Book a call
+          Request a call
         </button>
       </div>
-      <form className="audit contact" id="contact" ref={formRef} hidden={!open} aria-label="Book a call" onSubmit={handleSubmit(onSubmit)} aria-busy={isSubmitting}>
-        <span className="k mono">Book a call</span>
+      <form className="audit contact" id="contact" ref={formRef} hidden={!open} aria-label="Request a call" onSubmit={handleSubmit(onSubmit)} aria-busy={isSubmitting}>
+        <span className="k mono">Request a call</span>
         <label>Name<input {...register('name')} autoComplete="name" placeholder="Your name" aria-invalid={!!errors.name} /></label>
         <label>Email<input {...register('email')} autoComplete="email" placeholder="you@company.com" aria-invalid={!!errors.email} /></label>
         <label>Phone (optional)<input {...register('phone')} autoComplete="tel" inputMode="tel" placeholder="(###) ###-####" aria-invalid={!!errors.phone} /></label>
@@ -170,7 +246,7 @@ export function NightBook() {
           </select>
         </label>
         <label>Message<textarea {...register('message')} placeholder="Tell us what’s going on (current site, what you want fixed, etc.)" aria-invalid={!!errors.message} /></label>
-        <button className="btn solid" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Sending…' : 'Send Request'}</button>
+        <button className="btn solid" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Sending…' : 'Send request'}</button>
         <p className={isErr ? 'note err' : 'note'} id="contactNote" role="status">{note}</p>
       </form>
     </>

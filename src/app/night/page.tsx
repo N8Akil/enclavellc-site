@@ -7,6 +7,9 @@ import localFont from 'next/font/local'
 import { crew, crewSrc, mobileCardFrame, pad } from './crew'
 import { NightCrewMotion } from './night-crew-motion'
 import { NightAuditForm, NightBook } from './night-forms'
+import { NightCoverage } from './night-coverage'
+import { NightDock, NightIntroducing } from './night-dock'
+import { NightClock } from './night-clock'
 import './night.css'
 
 // Preview of the new home page (concept D · Night Crew). Not linked from anywhere and kept out of search.
@@ -66,11 +69,11 @@ export default function NightPage() {
       <header className="top">
         <div className="wrap">
           <a className="brand" href="#top" aria-label="Enclave, home"><span className="mark" aria-hidden="true"></span><span>Enclave</span></a>
-          <nav className="nav" aria-label="Main"><a href="#crew">The crew</a><a href="#sheet">Call sheet</a><a href="#make">What we make</a><a href="#work">Now showing</a></nav>
+          <nav className="nav" aria-label="Main"><a href="#report">The free audit</a><a href="#crew">The crew</a><a href="#make">What we make</a><a href="#work">Now showing</a></nav>
           <div className="tools">
             <span className="rec mono" id="rec" aria-hidden="true"><i></i><span id="recTxt">Rolling</span></span>
             <button className="theme" id="theme" type="button" aria-label="Switch to the day set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4.5" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></svg><span id="themeLabel">Day</span></button>
-            <a className="btn gold" href="#book">Book<span className="long">{' '}a call</span></a>
+            <a className="btn gold" href="#book">Request<span className="long">{' '}a call</span></a>
           </div>
         </div>
       </header>
@@ -85,7 +88,8 @@ export default function NightPage() {
               </div>
               <div>
                 <p className="sub">Your website, your follow-up and your content keep working after you close. One founder, six AI partners, one studio.</p>
-                <div className="row"><a className="btn gold" href="#audit">Get a free site audit</a><a className="btn" href="#crew">Meet the crew</a></div>
+                <NightAuditForm variant="hero" />
+                <NightClock />
               </div>
             </div>
           </div>
@@ -125,8 +129,31 @@ export default function NightPage() {
           </div>
         </section>
 
-        <section className="sec" id="crew" aria-labelledby="crew-h">
-          <div className="wrap"><div className="head rv"><SecSlate scene="02" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p>Scroll and each one steps into the light, starting with the director. The monitor shows the kind of work they do for you; it is an illustration, not live data.</p></div></div>
+        <section className="sec report-sec" id="report" aria-labelledby="report-h">
+          <div className="wrap">
+            <div className="head rv"><SecSlate scene="02" loc="The report" /><h2 className="h2" id="report-h">What the audit hands you</h2><p>The free audit is a written report, sent to your inbox as a document you can forward. It is generated automatically from your site&apos;s public pages. Here is what is inside.</p></div>
+            <div className="report rv">
+              <div className="sheet" aria-hidden="true">
+                <span className="mono">Enclave · website audit report</span>
+                <strong>yourbusiness.com</strong>
+                <span className="score"><b>?</b><em>/10</em></span>
+                <span className="mono">Overall score · yours to find out</span>
+              </div>
+              <ol className="toc">
+                <li><h3>Executive summary</h3><p>Where your site stands, in plain language.</p></li>
+                <li><h3>Score breakdown</h3><p>An overall score out of 10, and a score for each area checked.</p></li>
+                <li><h3>Top strengths</h3><p>What is already working, so you keep it.</p></li>
+                <li><h3>Priority issues</h3><p>What needs fixing, most urgent first, and what each one is costing you.</p></li>
+                <li><h3>Detailed analysis</h3><p>What was found and what is recommended, area by area.</p></li>
+                <li><h3>Action plan</h3><p>Quick wins for this week, then one to four weeks, then one to three months.</p></li>
+              </ol>
+            </div>
+            <div className="report-go"><a className="btn gold" href="#audit">Send my web address</a><span className="mono">Free · in your inbox in a few minutes</span></div>
+          </div>
+        </section>
+
+        <section className="sec flush" id="crew" aria-labelledby="crew-h">
+          <div className="wrap"><div className="head rv"><SecSlate scene="03" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p>Nate is the founder. The six partners are AI agents who work with him, and their portraits are generated images, not photographs of people. <span className="only-desk">Scroll and each one steps into the light, starting with Nate. The monitor shows the kind of work they do for you; it is an illustration, not live data.</span><span className="only-phone">Swipe to meet each one, starting with Nate.</span></p></div></div>
           <div className="crew-track" id="crewTrack" style={css({ '--n': crew.length })}>
             <div className="crew-pin wrap" id="crewPin">
               <nav className="names" aria-label="Scenes">
@@ -140,7 +167,7 @@ export default function NightPage() {
               </div>
               <div className="brief" id="brief"></div>
               <p className="vh" id="onAir" aria-live="polite"></p>
-              <div className="crew-mobile" id="crewMobile">
+              <div className="crew-mobile" id="crewMobile" tabIndex={0} role="region" aria-label="The crew, one card each. Scrolls sideways.">
                 {crew.map((c) => {
                   const m = mobileCardFrame(c)
                   return (
@@ -151,45 +178,16 @@ export default function NightPage() {
                   )
                 })}
               </div>
+              <p className="swipe mono" aria-hidden="true">Swipe · Nate and six partners</p>
             </div>
           </div>
-          <div className="wrap"><p className="joining mono">Also on the call sheet: Naunet and Amaunet. Their portraits are still being shot.</p></div>
-        </section>
-
-        <section className="sec flush" id="sheet" aria-labelledby="sheet-h">
-          <div className="wrap">
-            <div className="head rv"><SecSlate scene="03" loc="Production office" /><h2 className="h2" id="sheet-h">The call sheet</h2><p>On a film set, the call sheet tells everyone who is working, what they handle and when to show up. Here is ours.</p></div>
-            <div className="table-box rv" tabIndex={0} role="region" aria-label="Call sheet table, scrolls sideways">
-              <table>
-                <thead><tr><th scope="col">Crew</th><th scope="col">Department</th><th scope="col">Call time</th><th scope="col">Handles</th></tr></thead>
-                <tbody>
-                  <tr className="founder-row"><td>Nate</td><td>Director</td><td><span className="call">Your hours</span></td><td>Every call with you, every decision, final approval. You always talk to a person.</td></tr>
-                  <tr><td>Isis</td><td>Art department</td><td><span className="call">After hours too</span></td><td>Design and build: sites, native iPhone apps, brand, and pages that turn visitors into calls.</td></tr>
-                  <tr><td>Thoth</td><td>Engineering</td><td><span className="call">After hours too</span></td><td>Forms, bookings, follow-up and the connections between your tools.</td></tr>
-                  <tr><td>Ra</td><td>Operations</td><td><span className="call">After hours too</span></td><td>Hosting, security, backups and keeping everything online.</td></tr>
-                  <tr><td>Horus</td><td>Publicity</td><td><span className="call">On schedule</span></td><td>Posts, short videos, newsletters and replies in your voice.</td></tr>
-                  <tr><td>Osiris</td><td>Continuity</td><td><span className="call">Before every release</span></td><td>Checks every page, link and word before your customers see it.</td></tr>
-                  <tr><td>Amun</td><td>Production</td><td><span className="call">At kickoff</span></td><td>The plan, the milestones and one price agreed up front.</td></tr>
-                  <tr className="pending"><td>Naunet</td><td><span className="stamp sm">Coming soon</span></td><td><span className="call">Soon</span></td><td></td></tr>
-                  <tr className="pending"><td>Amaunet</td><td><span className="stamp sm">Coming soon</span></td><td><span className="call">Soon</span></td><td></td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+          <div className="wrap"><p className="joining mono">Joining soon: Naunet and Amaunet, two more AI partners.</p></div>
         </section>
 
         <section className="sec flush" id="make" aria-labelledby="make-h">
           <div className="wrap">
-            <div className="head rv"><SecSlate scene="04" loc="Coverage" /><h2 className="h2" id="make-h">What we make</h2><p>Start with the free audit. Take one piece or the whole production.</p></div>
-            <div className="coverage rv">
-              <article className="cov first"><span className="mono">Start here · free</span><h3>Site audit</h3><p>Send your web address and get a plain-language report on what is working and what is costing you customers.</p><a href="#audit">Send your web address</a><span className="who mono">Osiris + Isis</span></article>
-              <article className="cov"><h3>Website rebuild</h3><p>Fast, mobile-first and easy to find, built to turn visitors into calls.</p><span className="who mono">Isis + Thoth</span></article>
-              <article className="cov"><h3>iPhone apps</h3><p>Native apps built in Swift: fast, accessible, and connected to your site and the tools you already use.</p><span className="soon mono">Android · coming soon</span><span className="who mono">Isis + Thoth</span></article>
-              <article className="cov"><h3>Automation</h3><p>Forms, notifications, scheduling and follow-up that run without you.</p><span className="who mono">Thoth + Ra</span></article>
-              <article className="cov"><h3>Content and video</h3><p>Posts, graphics, newsletters and training videos in your voice.</p><span className="who mono">Horus</span></article>
-              <article className="cov"><h3>Social media</h3><p>A steady schedule across your platforms, with replies and simple reporting.</p><span className="who mono">Horus</span></article>
-              <article className="cov"><h3>Full overhaul</h3><p>All of it together, planned end to end, with priority support after launch.</p><span className="who mono">The whole crew</span></article>
-            </div>
+            <div className="head rv"><SecSlate scene="04" loc="Coverage" /><h2 className="h2" id="make-h">What we make</h2><p>Start with the free audit. Then tap the pieces you want and request a call about exactly those.</p></div>
+            <NightCoverage />
           </div>
         </section>
 
@@ -197,7 +195,7 @@ export default function NightPage() {
           <div className="wrap">
             <div className="head rv"><SecSlate scene="05" loc="Production board" /><h2 className="h2" id="how-h">The shooting schedule</h2><p>Five scenes on the board, and the founder is on set for every one.</p></div>
             <ol className="steps rv">
-              <li><h3>Free audit</h3><p>We review your site and send the report.</p></li>
+              <li><h3>Free audit</h3><p>Send your web address. The report is generated automatically and emailed to you.</p></li>
               <li><h3>Call with the founder</h3><p>We talk through your business and goals.</p></li>
               <li><h3>Plan and quote</h3><p>Amun maps the work. You get one clear price.</p></li>
               <li><h3>Build</h3><p>The crew builds. Osiris checks everything before you see it.</p></li>
@@ -208,12 +206,7 @@ export default function NightPage() {
 
         <section className="sec flush" id="work" aria-labelledby="work-h">
           <div className="wrap">
-            <div className="head rv"><SecSlate scene="06" loc="Screening room" /><h2 className="h2" id="work-h">Now showing</h2><p>Every project is shown with the client&apos;s written permission.</p></div>
-            <div className="work rv">
-              <div className="slot big"><span className="mono">Our build · Enclave Landscape Management</span><strong>ELM</strong><span className="stamp">Coming soon</span></div>
-              <div className="slot"><span className="mono">Our build · quality control</span><strong>EnclaveQC</strong><span className="stamp sm">Coming soon</span></div>
-              <div className="slot"><span className="mono">Our build · the platform</span><strong>iEnclave</strong><span className="stamp sm">Coming soon</span></div>
-            </div>
+            <div className="head rv"><SecSlate scene="06" loc="Screening room" /><h2 className="h2" id="work-h">Now showing</h2><p>Our own builds, in production now. Client work appears here only with the client&apos;s written permission.</p></div>
             <div className="ventures rv" role="group" aria-label="What the crew is building next">
               <div className="venture"><span className="dot build mono">In production</span><h3>Enclave Landscape Management</h3><span className="stamp sm">Under construction</span></div>
               <div className="venture"><span className="dot build mono">In production · target Jan 2027</span><h3>EnclaveQC</h3><span className="stamp sm">Under construction</span></div>
@@ -231,14 +224,14 @@ export default function NightPage() {
                 <div className="grp"><span className="k mono">Starring</span>
                   <div className="cast"><span>Design and build</span><span>Isis</span><span>Engineering</span><span>Thoth</span><span>Operations</span><span>Ra</span><span>Content and social</span><span>Horus</span><span>Quality review</span><span>Osiris</span><span>Production</span><span>Amun</span><span>Coming soon</span><span>Naunet</span><span>Coming soon</span><span>Amaunet</span></div>
                 </div>
-                <div className="grp"><span className="k mono">And introducing</span><span className="v" style={{ color: 'var(--gold-ink)' }}>Your business</span></div>
+                <div className="grp"><span className="k mono">And introducing</span><NightIntroducing /></div>
               </div>
             </div>
           </div>
           <div className="wrap end" id="book" tabIndex={-1}>
             <div className="end-copy">
               <h2 id="end-h">Your scene is next.</h2>
-              <p>Book a call with Nate, or start with the free audit. You will hear back from a person.</p>
+              <p>Request a call and Nate replies to you himself. Or start with the free audit: that report is generated automatically and arrives by email in a few minutes.</p>
               <NightBook />
             </div>
             <NightAuditForm />
@@ -247,6 +240,7 @@ export default function NightPage() {
       </main>
       <footer><div className="wrap"><span>© Enclave LLC</span><span>Investor questions: [investor email]</span></div></footer>
 
+      <NightDock />
       <NightCrewMotion />
     </div>
   )

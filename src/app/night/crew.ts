@@ -28,12 +28,9 @@ export const crewSrc = (id: string) => `/night/crew/${id}.webp`
 
 export const pad = (n: number) => String(n).padStart(2, '0')
 
-// Phone cards are sized by height, so a landscape cutout matches the rest; a wide one is cropped around the head.
+// Phone cards (round 3): a strip of cards, each a 256px-tall frame the cutout covers. The crop keeps the TOP of the cutout (the head)
+// and, for a cutout wider than the frame, centres on the head's own x.
 export function mobileCardFrame(c: CrewMember) {
-  const clamp01 = (v: number) => Math.max(0, Math.min(1, v))
-  const iw = 190 * c.w / c.h, bw = Math.min(132, iw), hx = 0.5 + c.fx, ox = iw > bw ? clamp01((hx * iw - bw / 2) / (iw - bw)) : 0.5
-  return {
-    hx: `${Math.round(iw > bw ? (hx * iw - ox * (iw - bw)) / bw * 100 : hx * 100)}%`,
-    objectPosition: `${Math.round(ox * 100)}% 100%`,
-  }
+  const hx = Math.round(Math.max(0, Math.min(1, 0.5 + c.fx)) * 100)
+  return { hx: `${hx}%`, objectPosition: `${hx}% 0%` }
 }

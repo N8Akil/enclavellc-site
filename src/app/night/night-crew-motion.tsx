@@ -52,6 +52,25 @@ export function NightCrewMotion() {
     on(btn, 'click', () => { const next = isDark() ? 'light' : 'dark'; root.dataset.theme = next; try { localStorage.setItem('enclave-theme', next) } catch {} sync() })
     on(sys, 'change', sync); sync()
 
+    // the house lights: a visitor on the day set, who has not picked a set, sees the lights go down as the crew scene
+    // arrives and come back up above it. A saved or fresh pick, a system set to dark, or reduced motion switches this off.
+    let picked = false
+    try { picked = !!localStorage.getItem('enclave-theme') } catch {}
+    on(btn, 'click', () => { picked = true })
+    const crewScene = $('crew')
+    if (crewScene && !reduce) {
+      let lightsFrame = 0
+      const lights = () => {
+        lightsFrame = 0
+        if (picked || sys.matches) return
+        const want = crewScene.getBoundingClientRect().top < innerHeight * 0.5 ? 'dark' : 'light'
+        if ((root.dataset.theme || 'light') !== want) { root.dataset.theme = want; sync() }
+      }
+      on(window, 'scroll', () => { if (!lightsFrame) lightsFrame = requestAnimationFrame(lights) }, { passive: true })
+      off.push(() => { if (lightsFrame) cancelAnimationFrame(lightsFrame) })
+      lights()
+    }
+
     // film grain, drawn once
     const g = document.createElement('canvas'); g.width = g.height = 160
     const gx = g.getContext('2d')
