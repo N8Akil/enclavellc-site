@@ -28,6 +28,23 @@ const auditSchema = z.object({
 
 type AuditValues = z.infer<typeof auditSchema>
 
+// A web address typed into either audit form is remembered for this tab only (sessionStorage; nothing is sent anywhere):
+// the other audit form, the dock and the end credits pick it up through the "nc:url" event, and it is cleared once an
+// audit is sent.
+const URL_KEY = 'nc-url'
+export const readTypedUrl = () => { try { return sessionStorage.getItem(URL_KEY) || '' } catch { return '' } }
+const shareTypedUrl = (v: string) => {
+  try { if (v) sessionStorage.setItem(URL_KEY, v); else sessionStorage.removeItem(URL_KEY) } catch {}
+  window.dispatchEvent(new CustomEvent('nc:url', { detail: v }))
+}
+// the host a visitor would recognise as theirs, or '' while what they have typed is not an address yet
+export const hostOf = (v: string) => {
+  try {
+    const h = new URL(v.startsWith('http') ? v : `https://${v}`).hostname.replace(/^www\./, '')
+    return h.includes('.') && h.length <= 48 && !h.endsWith('.') ? h : ''
+  } catch { return '' }
+}
+
 // variant 'hero' is the same form in the opening shot: website and email only. The name is optional in the schema and is
 // sent as '' there, which is what the full form sends when its Name field is left blank.
 export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }) {
@@ -35,10 +52,24 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [resultMessage, setResultMessage] = useState('')
 
-  const { register, handleSubmit, formState: { errors }, reset } = useForm<AuditValues>({
+  const { register, handleSubmit, formState: { errors }, reset, setValue, getValues, watch } = useForm<AuditValues>({
     resolver: zodResolver(auditSchema),
     defaultValues: { userName: '' },
   })
+
+  // what this form's address field holds is shared; an address typed in the other form fills this one while it is empty
+  const typed = watch('websiteUrl')
+  useEffect(() => {
+    const v = (typed || '').trim()
+    if (hostOf(v) && v !== readTypedUrl()) shareTypedUrl(v)
+  }, [typed])
+  useEffect(() => {
+    const fill = (v: string) => { if (v && !getValues('websiteUrl')) setValue('websiteUrl', v) }
+    fill(readTypedUrl())
+    const onUrl = (e: Event) => fill((e as CustomEvent<string>).detail)
+    window.addEventListener('nc:url', onUrl)
+    return () => window.removeEventListener('nc:url', onUrl)
+  }, [getValues, setValue])
 
   const onSubmit = async (values: AuditValues) => {
     setStatus('loading')
@@ -64,6 +95,7 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
         setStatus('success')
         setResultMessage(`Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
         reset()
+        shareTypedUrl('')
       } else {
         setStatus('error')
         setResultMessage(data.message || 'Something went wrong. Please try again.')

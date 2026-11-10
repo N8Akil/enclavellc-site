@@ -414,3 +414,19 @@ html:has(.nc) body{background:transparent}
 .nc .crew-track{height:calc(var(--n,7) * 66vh)}
 @media (max-width:980px){.nc .crew-track{height:auto}}
 .nc .ventures{margin-top:0}
+
+/* ---- round 3 · the last credit takes the visitor's own site ---- */
+.nc .roll .v.intro{color:var(--gold-ink);overflow-wrap:anywhere;text-transform:uppercase}
+
+/* ---- round 3 · on a phone the cast is a strip you swipe, one card to a thumb ---- */
+.nc .swipe{display:none;color:var(--dim)}
+@media (max-width:980px){
+  .nc .crew-mobile{grid-auto-flow:column;grid-auto-columns:min(78vw,320px);gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;margin-inline:calc(-1 * var(--gut));padding:4px var(--gut) 16px;scroll-padding-inline:var(--gut);scrollbar-width:thin;scrollbar-color:var(--gold-ink) transparent;outline-offset:-2px}
+  .nc .crew-mobile::-webkit-scrollbar{height:4px}.nc .crew-mobile::-webkit-scrollbar-thumb{background:var(--gold-ink)}
+  .nc .mcard{scroll-snap-align:start;grid-template-columns:1fr;grid-template-rows:auto 1fr;align-items:start;gap:0;padding:0}
+  .nc .mcard .pool{height:270px;display:grid;align-items:end;background:var(--bg-2);overflow:hidden}
+  .nc .mcard .pool::before{inset:0;background:radial-gradient(70% 55% at 50% 100%,var(--pool-glow),transparent 72%)}
+  .nc .mcard img{height:256px;width:100%;max-width:none;object-fit:cover}
+  .nc .mcard>div:last-child{padding:16px 16px 18px}
+  .nc .swipe{display:block;margin-top:2px}
+}

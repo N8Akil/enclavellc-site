@@ -8,7 +8,7 @@ import { crew, crewSrc, mobileCardFrame, pad } from './crew'
 import { NightCrewMotion } from './night-crew-motion'
 import { NightAuditForm, NightBook } from './night-forms'
 import { NightCoverage } from './night-coverage'
-import { NightDock } from './night-dock'
+import { NightDock, NightIntroducing } from './night-dock'
 import { NightClock } from './night-clock'
 import './night.css'
 
@@ -167,7 +167,7 @@ export default function NightPage() {
               </div>
               <div className="brief" id="brief"></div>
               <p className="vh" id="onAir" aria-live="polite"></p>
-              <div className="crew-mobile" id="crewMobile">
+              <div className="crew-mobile" id="crewMobile" tabIndex={0} role="region" aria-label="The crew, one card each. Scrolls sideways.">
                 {crew.map((c) => {
                   const m = mobileCardFrame(c)
                   return (
@@ -178,6 +178,7 @@ export default function NightPage() {
                   )
                 })}
               </div>
+              <p className="swipe mono" aria-hidden="true">Swipe · seven on the crew</p>
             </div>
           </div>
           <div className="wrap"><p className="joining mono">Also on the call sheet: Naunet and Amaunet. Their portraits are still being shot.</p></div>
@@ -223,7 +224,7 @@ export default function NightPage() {
                 <div className="grp"><span className="k mono">Starring</span>
                   <div className="cast"><span>Design and build</span><span>Isis</span><span>Engineering</span><span>Thoth</span><span>Operations</span><span>Ra</span><span>Content and social</span><span>Horus</span><span>Quality review</span><span>Osiris</span><span>Production</span><span>Amun</span><span>Coming soon</span><span>Naunet</span><span>Coming soon</span><span>Amaunet</span></div>
                 </div>
-                <div className="grp"><span className="k mono">And introducing</span><span className="v" style={{ color: 'var(--gold-ink)' }}>Your business</span></div>
+                <div className="grp"><span className="k mono">And introducing</span><NightIntroducing /></div>
               </div>
             </div>
           </div>
