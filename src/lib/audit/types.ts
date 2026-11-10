@@ -87,6 +87,8 @@ export interface WebsiteContent {
   // the homepage first, then the linked pages that could be read
   pages: FetchedPage[];
   probes?: SiteProbes;
+  // linked addresses on the site whose page read was redirected to another site: not followed, so not read
+  offSitePages?: string[];
 }
 
 // A measurement from outside this code (a page-speed test, a phone screenshot). Nothing in this repository makes
@@ -99,14 +101,18 @@ export type Measurements =
       screenshot?: { mediaType: string; dataBase64: string };
     };
 
-// What a finding rests on. Four kinds, and the report says in words which one each finding has (present.ts).
+// What a finding rests on. Five kinds, and the report says in words which one each finding has (present.ts).
+// The kind is set by the code that verifies the evidence (run-audit.ts verifyEvidence, facts.ts factEvidence),
+// never by the model and never read off the text.
 //   quote    the page's own words (checked against the page, or picked out of the page by the code)
 //   absent   something the CODE looked for on the pages read and did not find; the label is written in facts.ts
-//   measured a number the CODE counted, or one taken from an injected measurement; never a number from the model
+//   counted  a count or length the CODE computed from the pages read (or the site's probes); written in facts.ts
+//   measured a measurement taken outside this code and injected (Measurements); never a number from the model
 //   screen   the model's reading of the phone screenshot. Code cannot check it. Only in First impression.
 export type Evidence =
   | { kind: 'quote'; pageUrl: string; quote: string }
   | { kind: 'absent'; label: string }
+  | { kind: 'counted'; text: string }
   | { kind: 'measured'; text: string }
   | { kind: 'screen' };
 

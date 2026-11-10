@@ -98,7 +98,7 @@ export const reportFixture: AuditResults = {
   whereYouStand: 'Families can reach you in one tap; caregivers cannot find where to apply.',
   working: [
     { title: 'A number to tap', line: 'A family on a phone can call you in one tap.', evidence: { kind: 'quote', pageUrl: `${REPORT_SITE}/`, quote: EVIL_QUOTE } },
-    { title: 'Your links answer', line: 'Nothing we tried on your own site was broken.', evidence: { kind: 'measured', text: 'all 18 links we checked on your own site answered' } },
+    { title: 'Your links answer', line: 'Nothing we tried on your own site was broken.', evidence: { kind: 'counted', text: 'all 18 links we checked on your own site answered' } },
   ],
   fixes: [
     {
@@ -122,7 +122,7 @@ export const reportFixture: AuditResults = {
     {
       headline: 'Shorten the home page title',
       whatWeSaw: 'The title is longer than search results show.',
-      evidence: { kind: 'measured', text: 'your home page title is 96 characters long' },
+      evidence: { kind: 'counted', text: 'your home page title is 96 characters long' },
       whyItMatters: 'The town you serve is cut off in search results.',
       theFix: 'Put the service and the town in the first 60 characters.',
       effort: 'a_project',
@@ -162,7 +162,7 @@ export const reportFixture: AuditResults = {
       status: 'Needs Improvement',
       weight: 0.25,
       line: 'The door for families is open; the door for caregivers is missing.',
-      findings: [{ text: 'Some of your own links do not answer.', evidence: { kind: 'measured', text: '3 of the 18 links we checked on your own site answered with an error' } }],
+      findings: [{ text: 'Some of your own links do not answer.', evidence: { kind: 'counted', text: '3 of the 18 links we checked on your own site answered with an error' } }],
     },
     { key: 'trust', name: 'Trust', assessed: false, reason: UNSUPPORTED_SENTENCE },
   ],

@@ -5,7 +5,8 @@
 // Three families, which decide how a cited fact is printed (present.ts):
 //   absent    looked for on the pages read and not found  -> "Looked for on the pages read, not found: <label>"
 //   says      words the code picked out of the page       -> "Your page says: <the words>"
-//   measured  something the code counted                  -> "Measured: <label>"
+//   measured  something the code counted                  -> "Counted on your pages: <label>"
+//             ("Measured:" is kept for a measurement injected from outside this code; no fact is printed under it)
 //
 // EVERY LABEL IS WRITTEN HERE, ONCE. None of them is a verdict. In particular no label says that anything is or
 // is not lawful, licensed or allowed: a home-care fact reports the words the page uses, or that they were not
@@ -69,7 +70,7 @@ export const ABSENT_FACTS = {
   no_payer_words: { area: 'trust', label: 'how care is paid for (Medicaid, private pay, long-term care insurance or VA)' },
 } as const satisfies Record<string, Entry>;
 
-// Things the code counted. Each is printed after "Measured:".
+// Things the code counted. Each is printed after "Counted on your pages:".
 export const MEASURED_FACTS = {
   title_length: { area: 'found', label: (n) => `your home page title is ${n} characters long` },
   description_length: { area: 'found', label: (n) => `your home page description for search results is ${n} characters long` },
@@ -80,6 +81,14 @@ export const MEASURED_FACTS = {
     label: (broken, checked) => `${broken} of the ${checked} links we checked on your own site answered with an error`,
   },
   links_all_answer: { area: 'trust', label: (checked) => `all ${checked} links we checked on your own site answered` },
+  // how many linked pages were redirected off the site (the redirect was not followed, so they were not read), and
+  // up to three of their paths. The paths are the site's text: the model's hint is given without them (list '').
+  // ("a different site", not "another site": no label may sound as if other sites were checked)
+  redirects_off_site: {
+    area: 'trust',
+    label: (n, paths) =>
+      `${n} linked ${n === 1 ? 'page' : 'pages'} on your own site ${n === 1 ? 'sends' : 'send'} visitors to a different site and ${n === 1 ? 'was' : 'were'} not read${paths ? `: ${paths}` : ''}`,
+  },
 } as const satisfies Record<string, Entry>;
 
 // Words the code picked out of the page. The label says what they are; what is printed is the words themselves.
@@ -120,6 +129,8 @@ export function allFactLabels(): string[] {
 // ---------------------------------------------------------------------------------------------------------------
 
 const MAX_SNIPPET = 160;
+// how many of the pages that redirect off the site the off-site fact names by path
+const MAX_OFF_SITE_NAMED = 3;
 
 // The words around the first match, cut at sentence ends, always an exact piece of one segment of the page.
 function snippet(value: string, index: number, length: number): string {
@@ -275,6 +286,13 @@ export function computeFacts(content: WebsiteContent, niche: Niche): Fact[] {
     if (probes.links.broken.length > 0) measured('broken_links', '', [probes.links.broken.length, probes.links.checked]);
     else measured('links_all_answer', '', [probes.links.checked]);
   }
+  // one fact for the site: how many linked pages redirect off it, naming up to three. The paths are printed, never hinted.
+  const offSite = content.offSitePages ?? [];
+  if (offSite.length > 0) {
+    const named = offSite.slice(0, MAX_OFF_SITE_NAMED).map(pathOf).join(', ');
+    const more = offSite.length > MAX_OFF_SITE_NAMED ? ` and ${offSite.length - MAX_OFF_SITE_NAMED} more` : '';
+    measured('redirects_off_site', '', [offSite.length, `${named}${more}`], [offSite.length, '']);
+  }
 
   // --- Home care: the two doors, and the words a careful family or a referrer looks for. Words only, no verdict.
   if (niche === 'home_care') {
@@ -301,7 +319,8 @@ export function computeFacts(content: WebsiteContent, niche: Niche): Fact[] {
 // How a cited fact is printed. The words come from this module (or from the page, for "says"), never from the model.
 export function factEvidence(fact: Fact): Evidence {
   if (fact.family === 'absent') return { kind: 'absent', label: fact.label };
-  if (fact.family === 'measured') return { kind: 'measured', text: fact.label };
+  // a count the code made: never the "measured" kind, which belongs to injected measurements only
+  if (fact.family === 'measured') return { kind: 'counted', text: fact.label };
   return { kind: 'quote', pageUrl: fact.pageUrl ?? '', quote: fact.quote ?? '' };
 }
 

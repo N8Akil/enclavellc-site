@@ -139,7 +139,8 @@ describe('sendAuditEmails', () => {
       const total = LEAD_INS.reduce((sum, leadIn) => sum + (html.split(leadIn).length - 1), 0)
       expect(total).toBe(5)
       expect(html).toContain('Looked for on the pages read, not found: a careers or apply link')
-      expect(html).toContain('Measured: your home page title is 96 characters long')
+      expect(html).toContain('Counted on your pages: your home page title is 96 characters long')
+      expect(html).not.toContain('Measured:')
     })
 
     it('a quote containing <script>, a tag or a double quote is escaped, and shown with its page path', async () => {

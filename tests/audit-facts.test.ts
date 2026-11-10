@@ -78,6 +78,9 @@ describe('fact labels: written once, in code, and never a verdict', () => {
   it('the link facts speak of "your own site" only', () => {
     expect(MEASURED_FACTS.broken_links.label(3, 18)).toBe('3 of the 18 links we checked on your own site answered with an error')
     expect(MEASURED_FACTS.links_all_answer.label(18)).toBe('all 18 links we checked on your own site answered')
+    // a page that redirects off the site speaks of your own site, and does not claim the other site was asked
+    expect(MEASURED_FACTS.redirects_off_site.label(1, '/book')).toBe('1 linked page on your own site sends visitors to a different site and was not read: /book')
+    expect(MEASURED_FACTS.redirects_off_site.label(2, '')).toBe('2 linked pages on your own site send visitors to a different site and were not read')
     for (const label of labels.filter((l) => /link/i.test(l) && /check/i.test(l))) expect(label).toContain('on your own site')
     for (const label of labels) expect(label).not.toMatch(/external|other sites?|outbound|all (of )?your links|every link/i)
   })
@@ -158,7 +161,7 @@ describe('computeFacts: a general site', () => {
       expect(fact.quote!.length).toBeLessThanOrEqual(200)
       expect(factEvidence(fact)).toEqual({ kind: 'quote', pageUrl: fact.pageUrl, quote: fact.quote })
     }
-    expect(factEvidence(byId(facts, 'links_all_answer')!)).toEqual({ kind: 'measured', text: 'all 18 links we checked on your own site answered' })
+    expect(factEvidence(byId(facts, 'links_all_answer')!)).toEqual({ kind: 'counted', text: 'all 18 links we checked on your own site answered' })
   })
 
   it.each<[string, Partial<SiteProbes>, string[], string[]]>([
@@ -183,8 +186,47 @@ describe('computeFacts: a general site', () => {
       site('<p>Hi</p>', undefined, { ...PROBES, robots: { state: 'found', disallowsHome: true, rule: 'Disallow: /' }, links: { checked: 18, broken: [{ url: `${SITE}/x`, status: 404 }, { url: `${SITE}/y`, status: 500 }, { url: `${SITE}/z`, status: 410 }] } }),
       'general'
     )
-    expect(evidenceLine(factEvidence(byId(facts, 'broken_links')!))).toBe('Measured: 3 of the 18 links we checked on your own site answered with an error')
+    expect(evidenceLine(factEvidence(byId(facts, 'broken_links')!))).toBe('Counted on your pages: 3 of the 18 links we checked on your own site answered with an error')
     expect(evidenceLine(factEvidence(byId(facts, 'robots_disallows_home')!))).toBe('Your page says: “Disallow: /” (on /robots.txt)')
+  })
+
+  describe('linked pages that redirect off the site: ONE fact for the site, a count, naming up to three paths', () => {
+    const offSite = (...paths: string[]) => {
+      const facts = computeFacts({ ...site('<p>Hi</p>'), offSitePages: paths.map((path) => `${SITE}${path}`) }, 'general')
+      return { facts, fact: byId(facts, 'redirects_off_site')! }
+    }
+
+    it('one page: singular, its path printed, no path in the model\'s hint', () => {
+      const { facts, fact } = offSite('/book')
+      expect(fact).toMatchObject({
+        area: 'trust',
+        family: 'measured',
+        label: '1 linked page on your own site sends visitors to a different site and was not read: /book',
+        hint: '1 linked page on your own site sends visitors to a different site and was not read',
+      })
+      expect(facts.filter((f) => f.id.startsWith('redirects_off_site'))).toHaveLength(1)
+      expect(evidenceLine(factEvidence(fact))).toBe('Counted on your pages: 1 linked page on your own site sends visitors to a different site and was not read: /book')
+      expect(factsBlock(facts)).not.toContain('/book')
+    })
+
+    it('three pages: plural, all three named', () => {
+      const { facts, fact } = offSite('/book', '/shop?x=1', '/events')
+      expect(fact.label).toBe('3 linked pages on your own site send visitors to a different site and were not read: /book, /shop?x=1, /events')
+      expect(fact.hint).toBe('3 linked pages on your own site send visitors to a different site and were not read')
+      expect(facts.filter((f) => f.id.startsWith('redirects_off_site'))).toHaveLength(1)
+    })
+
+    it('more than three: three named, and how many more', () => {
+      const { facts, fact } = offSite('/book', '/shop', '/events', '/jobs', '/news')
+      expect(fact.label).toBe('5 linked pages on your own site send visitors to a different site and were not read: /book, /shop, /events and 2 more')
+      expect(fact.hint).toBe('5 linked pages on your own site send visitors to a different site and were not read')
+      for (const path of ['/book', '/shop', '/events', '/jobs', '/news']) expect(factsBlock(facts)).not.toContain(path)
+    })
+
+    it('none recorded: no fact', () => {
+      expect(ids(computeFacts(site('<p>Hi</p>'), 'general')).some((id) => id.startsWith('redirects_off_site'))).toBe(false)
+      expect(ids(computeFacts({ ...site('<p>Hi</p>'), offSitePages: [] }, 'general'))).not.toContain('redirects_off_site')
+    })
   })
 
   it('without probes (nothing was asked) no probe fact is made at all', () => {

@@ -3,6 +3,7 @@ import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
 import { generateAuditDocument } from '@/lib/audit/generate-document'
 import {
   LEAD_IN_ABSENT,
+  LEAD_IN_COUNTED,
   LEAD_IN_MEASURED,
   LEAD_IN_QUOTE,
   LEAD_IN_SCREEN,
@@ -38,12 +39,13 @@ const everyClaim = (r: AuditResults): Array<{ claim: string; evidence: Evidence 
 const leadInsIn = (line: string) => LEAD_INS.filter((leadIn) => line.includes(leadIn))
 
 describe('the wording helpers', () => {
-  it('the four lead-ins are four different sentences, one per kind of evidence', () => {
+  it('the five lead-ins are five different sentences, one per kind of evidence', () => {
     expect(LEAD_IN_QUOTE).toBe('Your page says:')
+    expect(LEAD_IN_COUNTED).toBe('Counted on your pages:')
     expect(LEAD_IN_MEASURED).toBe('Measured:')
     expect(LEAD_IN_ABSENT).toBe('Looked for on the pages read, not found:')
     expect(LEAD_IN_SCREEN).toBe('Seen in the phone screenshot:')
-    expect(new Set(LEAD_INS).size).toBe(4)
+    expect(new Set(LEAD_INS).size).toBe(5)
     // none is the start of another, so a line can be told apart by how it begins
     for (const a of LEAD_INS) for (const b of LEAD_INS) if (a !== b) expect(a.startsWith(b)).toBe(false)
     // [ruling 4] an absence always says where it was looked for: we read at most eleven pages, not the site
@@ -55,13 +57,15 @@ describe('the wording helpers', () => {
       quote: evidenceLine({ kind: 'quote', pageUrl: `${SITE}/about`, quote: 'Our team has twenty years' }),
       home: evidenceLine({ kind: 'quote', pageUrl: `${SITE}/`, quote: 'Hello there, welcome in' }),
       absent: evidenceLine({ kind: 'absent', label: 'a link to a privacy policy' }),
-      measured: evidenceLine({ kind: 'measured', text: '3 of the 18 links we checked on your own site answered with an error' }),
+      counted: evidenceLine({ kind: 'counted', text: '3 of the 18 links we checked on your own site answered with an error' }),
+      measured: evidenceLine({ kind: 'measured', text: 'the main content appeared after 4.2 seconds' }),
       screen: evidenceLine({ kind: 'screen' }),
     }
     expect(lines.quote).toBe('Your page says: “Our team has twenty years” (on /about)')
     expect(lines.home).toBe('Your page says: “Hello there, welcome in” (on /)')
     expect(lines.absent).toBe('Looked for on the pages read, not found: a link to a privacy policy')
-    expect(lines.measured).toBe('Measured: 3 of the 18 links we checked on your own site answered with an error')
+    expect(lines.counted).toBe('Counted on your pages: 3 of the 18 links we checked on your own site answered with an error')
+    expect(lines.measured).toBe('Measured: the main content appeared after 4.2 seconds')
     expect(lines.screen).toBe(`Seen in the phone screenshot: ${SCREEN_NOTE}`)
     for (const line of Object.values(lines)) {
       expect(leadInsIn(line)).toHaveLength(1)
@@ -170,8 +174,11 @@ describe('generateAuditDocument', () => {
     // and no other line in the document pretends to be evidence
     const evidenceLines = lines.filter((l) => LEAD_INS.some((leadIn) => l.startsWith(leadIn)))
     expect(evidenceLines.sort()).toEqual(claims.map((c) => evidenceLine(c.evidence)).sort())
-    // all four kinds are in this report, each under its own words
-    expect(new Set(evidenceLines.map((l) => leadInsIn(l)[0])).size).toBe(4)
+    // four of the five kinds are in this report, each under its own words. No measurement was injected for it,
+    // so nothing in it is printed under "Measured:": its counts are under "Counted on your pages:".
+    expect(new Set(evidenceLines.map((l) => leadInsIn(l)[0]))).toEqual(new Set([LEAD_IN_QUOTE, LEAD_IN_COUNTED, LEAD_IN_ABSENT, LEAD_IN_SCREEN]))
+    expect(lines).toContain('Counted on your pages: your home page title is 96 characters long')
+    expect(lines.filter((l) => l.startsWith(LEAD_IN_MEASURED))).toEqual([])
     expect(lines[lines.indexOf('The photo at the top shows a caregiver with a client.') + 1]).toBe(`Seen in the phone screenshot: ${SCREEN_NOTE}`)
 
     // phone call-outs, because this report has them

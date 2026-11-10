@@ -590,6 +590,74 @@ describe('allowedContentTypes: a per-call choice among plain text formats', () =
   })
 })
 
+describe('sameSiteOnly: a page read that never follows a redirect off the caller\'s site', () => {
+  const dns = { 'example.com': [v4(PUBLIC)], 'www.example.com': [v4(PUBLIC)], 'other.example.org': [v4(PUBLIC_2)], 'inside.example.com': [v4(PRIVATE)] }
+  const onSite = (hostname: string) => hostname === 'example.com' || hostname === 'www.example.com'
+
+  it('a redirect to another host ends the read with LEFT_SITE: that host is neither resolved nor connected to', async () => {
+    const h = harness(
+      {
+        'https://example.com/book': { status: 302, headers: { location: 'https://other.example.org/landing' } },
+        'https://other.example.org/landing': { body: '<html>OTHER-SITE-TEXT</html>' },
+      },
+      dns
+    )
+    const error = await refusal(safeFetchPage('https://example.com/book', { ...h.options, sameSiteOnly: onSite }))
+    expect(error.code).toBe('LEFT_SITE')
+    expect(h.calls.map((c) => c.url.href)).toEqual(['https://example.com/book'])
+    expect(h.calls.some((c) => c.hostname === 'other.example.org' || c.address === PUBLIC_2)).toBe(false)
+    expect(h.resolver.mock.calls.map(([host]) => host)).toEqual(['example.com'])
+    // and it says nothing about either host
+    expect(`${error.message} ${String(error)}`).not.toMatch(/example/)
+  })
+
+  it('is asked on EVERY hop: a hop that stays on the site is followed, the first one that leaves is not', async () => {
+    const h = harness(
+      {
+        'https://example.com/': { status: 301, headers: { location: 'https://www.example.com/' } },
+        'https://www.example.com/': { status: 302, headers: { location: 'http://other.example.org/' } },
+      },
+      dns
+    )
+    const asked: string[] = []
+    const predicate = (hostname: string) => (asked.push(hostname), onSite(hostname))
+    expect((await refusal(safeFetchPage('https://example.com/', { ...h.options, sameSiteOnly: predicate }))).code).toBe('LEFT_SITE')
+    expect(asked).toEqual(['www.example.com', 'other.example.org'])
+    expect(h.calls.map((c) => c.url.href)).toEqual(['https://example.com/', 'https://www.example.com/'])
+    expect(h.resolver.mock.calls.map(([host]) => host)).toEqual(['example.com', 'www.example.com'])
+  })
+
+  it('a redirect the predicate allows is followed and vetted as before; the other rules still refuse what they refused', async () => {
+    const ok = harness(
+      { 'https://example.com/': { status: 301, headers: { location: 'https://www.example.com/home' } }, 'https://www.example.com/home': { body: '<html>home</html>' } },
+      dns
+    )
+    expect((await safeFetchPage('https://example.com/', { ...ok.options, sameSiteOnly: onSite })).finalUrl).toBe('https://www.example.com/home')
+    expect(ok.resolver).toHaveBeenCalledTimes(2)
+    // a host the predicate allows but that resolves privately: still BLOCKED_ADDRESS, never connected
+    const inside = harness({ 'https://example.com/': { status: 302, headers: { location: 'https://inside.example.com/' } } }, dns)
+    const allowInside = (hostname: string) => onSite(hostname) || hostname === 'inside.example.com'
+    expect((await refusal(safeFetchPage('https://example.com/', { ...inside.options, sameSiteOnly: allowInside }))).code).toBe('BLOCKED_ADDRESS')
+    expect(inside.calls).toHaveLength(1)
+    // rule 1 on the new URL runs first: an odd port is BLOCKED_PORT whatever the predicate would say
+    const port = harness({ 'https://example.com/': { status: 302, headers: { location: 'https://www.example.com:8443/' } } }, dns)
+    expect((await refusal(safeFetchPage('https://example.com/', { ...port.options, sameSiteOnly: onSite }))).code).toBe('BLOCKED_PORT')
+  })
+
+  it('without the option the guard is unchanged: a redirect to another public host is followed', async () => {
+    const h = harness(
+      {
+        'https://example.com/book': { status: 302, headers: { location: 'https://other.example.org/landing' } },
+        'https://other.example.org/landing': { body: '<html>landed</html>' },
+      },
+      dns
+    )
+    const page = await safeFetchPage('https://example.com/book', h.options)
+    expect(page.finalUrl).toBe('https://other.example.org/landing')
+    expect(h.calls.map((c) => `${c.url.href} ${c.address}`)).toEqual([`https://example.com/book ${PUBLIC}`, `https://other.example.org/landing ${PUBLIC_2}`])
+  })
+})
+
 describe('safeCheckLink: one link on the site\'s own host, status only', () => {
   const HOST = 'example.com'
   const dns = { 'example.com': [v4(PUBLIC)], 'other.example.org': [v4(PUBLIC_2)], 'inside.example.com': [v4(PRIVATE)] }

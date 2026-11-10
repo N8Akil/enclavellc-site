@@ -225,7 +225,7 @@ export function buildUserMessage(
   }
   const sentPages = [...pages.values()].map(({ page }) => page);
   // facts are computed over exactly the pages that are sent, so "page 2" means the same thing to code and model
-  const factList = computeFacts({ pages: sentPages, probes: content.probes }, niche);
+  const factList = computeFacts({ pages: sentPages, probes: content.probes, offSitePages: content.offSitePages }, niche);
   const facts = new Map(factList.map((fact) => [fact.id, fact]));
   const { measures, screenshot } = usable(options?.measurements, nonce);
 

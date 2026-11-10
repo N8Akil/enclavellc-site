@@ -38,8 +38,12 @@ export async function fetchWebsiteContent(url: string, options: FetchWebsiteOpti
   const guarded = { ...fetchOptions, signal: deadline.signal };
 
   try {
-    // the homepage must load; a failure here fails the audit with the guard's typed error
-    const home = await safeFetchPage(normalizeUrl(url), guarded);
+    const start = normalizeUrl(url);
+    // page reads never follow a redirect off the site: the typed host and its www/apex twin only
+    const pageRead = { ...guarded, sameSiteOnly: sameSite(new URL(start).hostname) };
+    // the homepage must load; a failure here (a redirect off the site included: LEFT_SITE) fails the audit with
+    // the guard's typed error
+    const home = await safeFetchPage(start, pageRead);
     const homepage = extractPage(home.html, home.finalUrl);
     // links are followed on the host that actually answered (a site that redirects to www keeps its pages)
     const baseHost = new URL(home.finalUrl).host;
@@ -47,16 +51,19 @@ export async function fetchWebsiteContent(url: string, options: FetchWebsiteOpti
 
     // a few at a time, in order; a linked page that fails or is refused is skipped
     const linked: Array<FetchedPage | null> = new Array(links.length).fill(null);
+    // the linked addresses whose read was redirected off the site (not followed), in link order
+    const offSite: Array<string | null> = new Array(links.length).fill(null);
     let cursor = 0;
     const worker = async () => {
       while (cursor < links.length && !deadline.signal.aborted) {
         const index = cursor++;
         try {
-          const page = await safeFetchPage(links[index], guarded);
-          // a redirect off the site's host is not part of this site
+          const page = await safeFetchPage(links[index], pageRead);
+          // a page that ends on the site's twin host rather than the one that answered is not read as one of its pages
           if (new URL(page.finalUrl).host !== baseHost) continue;
           linked[index] = extractPage(page.html, page.finalUrl);
-        } catch {
+        } catch (error) {
+          if (error instanceof UnsafeUrlError && error.code === 'LEFT_SITE') offSite[index] = links[index];
           // skipped
         }
       }
@@ -70,12 +77,26 @@ export async function fetchWebsiteContent(url: string, options: FetchWebsiteOpti
       seen.add(page.url);
       pages.push(page);
     }
-    const probes = await probeSite(home.finalUrl, pages, guarded, deadline.signal, concurrency);
-    return { pages: capTotal(pages), probes };
+    const probes = await probeSite(home.finalUrl, pages, guarded, pageRead.sameSiteOnly, deadline.signal, concurrency);
+    return { pages: capTotal(pages), probes, offSitePages: offSite.filter((link): link is string => link !== null) };
   } finally {
     clearTimeout(timer);
     deadline.abort();
   }
+}
+
+// The audited site, as page reads see it: the host typed and its www/apex twin (example.com and www.example.com,
+// either way round), compared without regard to letter case. Nothing else is the same site: not another subdomain.
+// (Ports and schemes are the guard's business: rule 1 already refuses any port but the scheme's default.)
+export function sameSite(siteHostname: string): (hostname: string) => boolean {
+  const bare = (name: string) => name.toLowerCase().replace(/^\[|\]$/g, '');
+  const host = bare(siteHostname);
+  // "www.example.com" -> "example.com"; a name that is only "www." and one label keeps its www
+  const apex = /^www\.[^.]+\.[^.]/.test(host) ? host.slice(4) : host;
+  return (hostname) => {
+    const candidate = bare(hostname);
+    return candidate === apex || candidate === `www.${apex}`;
+  };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -123,18 +144,24 @@ async function probeSite(
   homeUrl: string,
   pages: FetchedPage[],
   guarded: SafeFetchOptions,
+  // the same-site rule of the page reads: robots.txt, the sitemap and the http:// probe follow a redirect only within
+  // the site, and one that points anywhere else ends with LEFT_SITE before that host is resolved (link checks have
+  // their own, stricter same-host rule and do not take this)
+  onSite: (hostname: string) => boolean,
   deadline: AbortSignal,
   concurrency: number
 ): Promise<SiteProbes> {
   const home = new URL(homeUrl);
   const origin = `${home.protocol}//${home.host}`;
-  // missing = the site answered and it is not there; unknown = no answer worth a claim
+  const siteRead = { ...guarded, sameSiteOnly: onSite };
+  // missing = the site answered and it is not there; unknown = no answer worth a claim (LEFT_SITE included: a file
+  // that lives on another site is not ours to read, so nothing is claimed about this site's own)
   const missingOrUnknown = (error: unknown): 'missing' | 'unknown' =>
     error instanceof UnsafeUrlError && (error.code === 'HTTP_STATUS' || error.code === 'BAD_CONTENT_TYPE') ? 'missing' : 'unknown';
 
   const robots = (async (): Promise<SiteProbes['robots']> => {
     try {
-      const file = await safeFetchPage(`${origin}/robots.txt`, { ...guarded, allowedContentTypes: PLAIN_TEXT_TYPES });
+      const file = await safeFetchPage(`${origin}/robots.txt`, { ...siteRead, allowedContentTypes: PLAIN_TEXT_TYPES });
       // a redirect to another host is not this site's robots.txt
       if (new URL(file.finalUrl).host !== home.host) return { state: 'unknown' };
       return { state: 'found', ...readRobots(file.html) };
@@ -145,7 +172,7 @@ async function probeSite(
 
   const sitemap = (async (): Promise<SiteProbes['sitemap']> => {
     try {
-      const file = await safeFetchPage(`${origin}/sitemap.xml`, { ...guarded, allowedContentTypes: XML_TYPES });
+      const file = await safeFetchPage(`${origin}/sitemap.xml`, { ...siteRead, allowedContentTypes: XML_TYPES });
       if (new URL(file.finalUrl).host !== home.host) return { state: 'unknown' };
       const locCount = countSitemapLocs(file.html);
       return locCount > 0 ? { state: 'found', locCount } : { state: 'missing' };
@@ -154,11 +181,12 @@ async function probeSite(
     }
   })();
 
-  // one extra request: the same host over http://. Where it ends up is the answer.
+  // one extra request: the same host over http://. Where it ends up is the answer. Its redirect to https:// (on the
+  // host or its www/apex twin) is followed; one to another site ends the probe unanswered ('unknown').
   const httpsRedirect = (async (): Promise<SiteProbes['httpsRedirect']> => {
     if (home.protocol !== 'https:') return 'unknown';
     try {
-      const plain = await safeFetchPage(`http://${home.host}/`, guarded);
+      const plain = await safeFetchPage(`http://${home.host}/`, siteRead);
       return plain.finalUrl.startsWith('https://') ? 'redirects' : 'no_redirect';
     } catch {
       return 'unknown';

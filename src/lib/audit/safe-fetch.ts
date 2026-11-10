@@ -3,7 +3,8 @@
 //   1. URL rules (scheme, credentials, port, length) on the first URL and on every redirect hop;
 //   2. the hostname is resolved ONCE per hop, and the request is refused unless every answer is a public address;
 //   3. the connection is pinned to the vetted address (a second DNS answer cannot move it: DNS rebinding);
-//   4. redirects are followed by hand, at most FETCH_MAX_REDIRECTS, each hop through 1-3 again;
+//   4. redirects are followed by hand, at most FETCH_MAX_REDIRECTS, each hop through 1-3 again (and, when the caller
+//      passes sameSiteOnly, never to a host outside its site: checked before the hop is resolved);
 //   5. a time limit per request, a body cap, and HTML content types only.
 // Errors are UnsafeUrlError with a code. Their messages never carry the URL, the hostname or the address,
 // because this app's logs carry codes only.
@@ -28,7 +29,9 @@ export type UnsafeUrlCode =
   | 'TIMEOUT'
   | 'BAD_CONTENT_TYPE'
   | 'HTTP_STATUS'
-  | 'NETWORK';
+  | 'NETWORK'
+  // a redirect pointed off the site the caller named (sameSiteOnly); it was not followed
+  | 'LEFT_SITE';
 
 export class UnsafeUrlError extends Error {
   readonly code: UnsafeUrlCode;
@@ -252,6 +255,11 @@ export interface SafeFetchOptions {
   // text formats the audit reads (robots.txt, sitemap.xml): see READABLE_TYPES. It changes nothing about where a
   // request may go: the URL rules, the address check and the pin run before any response exists to have a type.
   allowedContentTypes?: readonly string[];
+  // The hosts this ONE call may be redirected to (given the bare, lower-case hostname of each redirect hop). When
+  // given, a redirect to a host it refuses is NOT followed: the request ends with LEFT_SITE before that hop is
+  // resolved or connected, so the other host is never asked anything. It only narrows where a request may go; every
+  // other rule is unchanged. Left out, redirects go wherever rules 1-3 allow, as before.
+  sameSiteOnly?: (hostname: string) => boolean;
 }
 
 export interface SafePage {
@@ -409,6 +417,8 @@ async function guardedRequest(input: string, options: SafeFetchOptions, purpose:
         if (purpose.kind === 'status' && checked.host !== purpose.sameHost) {
           return { finalUrl: current.href, status: response.status, body: '', leftHost: true };
         }
+        // off the caller's site: stop here, before the next hop is resolved or connected
+        if (options.sameSiteOnly && !options.sameSiteOnly(bareHostname(checked).toLowerCase())) throw new UnsafeUrlError('LEFT_SITE');
         current = checked;
         continue;
       }

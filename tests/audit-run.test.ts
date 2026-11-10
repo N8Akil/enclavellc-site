@@ -26,6 +26,7 @@ import {
   stripDelimiters,
   verifyEvidence,
 } from '@/lib/audit/run-audit'
+import { LEAD_IN_COUNTED, LEAD_IN_MEASURED, evidenceLine } from '@/lib/audit/present'
 import type { AssessedArea, AuditResults, Measurements, WebsiteContent } from '@/lib/audit/types'
 import { loggedText, spyLogs } from './helpers'
 
@@ -442,6 +443,39 @@ describe('runAudit', () => {
     expect(verifyEvidence({ kind: 'screen', pageUrl: '', text: '' }, withBoth, first)).toEqual({ kind: 'screen' })
     expect(verifyEvidence({ kind: 'screen', pageUrl: '', text: '' }, withBoth)).toBeNull()
     expect(verifyEvidence({ kind: 'measure', pageUrl: '', text: 'load_time' }, withBoth)).toEqual({ kind: 'measured', text: 'the main content appeared after 4.2 seconds' })
+  })
+
+  it('a count our code made prints under "Counted on your pages:", never "Measured:"; an injected measure prints under "Measured:", never the other', async () => {
+    const input = toolInput({ ...SCORES, speed: 6 })
+    // a counted fact (the home page title's length) and an injected measure, side by side in the same report
+    input.areas[0].findings.push({ text: 'The home page title is long.', evidence: fact('title_length') })
+    const c = client(toolReply(input))
+    const result = ok(await run(c, content(), MEASURES))
+    const counted = area(result, 'found') as AssessedArea
+    const measured = area(result, 'speed') as AssessedArea
+    const titleLength = 'Garrett Plumbing, plumbers in Dayton Ohio'.length
+    // the kind is set by the verifying code, from where the evidence came from
+    expect(counted.findings.at(-1)!.evidence).toEqual({ kind: 'counted', text: `your home page title is ${titleLength} characters long` })
+    expect(measured.findings[0].evidence).toEqual({ kind: 'measured', text: 'the main content appeared after 4.2 seconds on a simulated phone' })
+
+    const countedLine = evidenceLine(counted.findings.at(-1)!.evidence)
+    const measuredLine = evidenceLine(measured.findings[0].evidence)
+    expect(countedLine).toBe(`${LEAD_IN_COUNTED} your home page title is ${titleLength} characters long`)
+    expect(countedLine).not.toContain(LEAD_IN_MEASURED)
+    expect(measuredLine).toBe(`${LEAD_IN_MEASURED} the main content appeared after 4.2 seconds on a simulated phone`)
+    expect(measuredLine).not.toContain(LEAD_IN_COUNTED)
+    // across the whole report: every fact-backed count is under "Counted", every injected measure under "Measured"
+    const all = [...result.working, ...result.fixes, ...assessed(result).flatMap((a) => a.findings)].map((item) => item.evidence)
+    for (const evidence of all) {
+      const line = evidenceLine(evidence)
+      if (evidence.kind === 'counted') expect(line.startsWith(LEAD_IN_COUNTED) && !line.includes(LEAD_IN_MEASURED), line).toBe(true)
+      if (evidence.kind === 'measured') expect(line.startsWith(LEAD_IN_MEASURED) && !line.includes(LEAD_IN_COUNTED), line).toBe(true)
+    }
+    // the verifier makes the same distinction on its own
+    const { pages, facts } = buildUserMessage(content(), SITE, {}, NONCE)
+    const context = { pages, facts, measures: new Map([['load_time', 'the main content appeared after 4.2 seconds']]), screen: false }
+    expect(verifyEvidence({ kind: 'fact', pageUrl: '', text: 'title_length' }, context)).toMatchObject({ kind: 'counted' })
+    expect(verifyEvidence({ kind: 'measure', pageUrl: '', text: 'load_time' }, context)).toMatchObject({ kind: 'measured' })
   })
 
   describe('with an injected measurement', () => {

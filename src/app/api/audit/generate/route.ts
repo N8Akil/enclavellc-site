@@ -40,6 +40,23 @@ export async function POST(request: NextRequest) {
   // failure logs carry this id and a code, never the visitor's details
   const requestId = crypto.randomUUID().slice(0, 8);
 
+  // What this request holds until its audit is admitted: one of the day's audit slots and a place in the queue.
+  // An audit that is NOT admitted (it becomes a lead, it fails, or something throws) gives back whatever it holds,
+  // so no slot and no place is ever left taken with no audit behind it. Once the work is handed to the queue, the
+  // queue gives the place back when the audit ends; the slot stays spent.
+  let holdsSlot = false;
+  let holdsPlace = false;
+  const giveBack = () => {
+    if (holdsPlace) {
+      holdsPlace = false;
+      auditQueue.release();
+    }
+    if (holdsSlot) {
+      holdsSlot = false;
+      auditLimiter.returnAuditSlot();
+    }
+  };
+
   try {
     // Parse request body
     const body = await request.json();
@@ -76,11 +93,14 @@ export async function POST(request: NextRequest) {
     const adminEmail = process.env.ADMIN_EMAIL || 'n.garrett@enclavellc.net';
 
     // Limits come BEFORE anything that costs: no page is requested and no model is called for a refused
-    // request. An allowed attempt is counted here, so a request that fails later still used its turn.
-    // The per-person and hourly limits apply to every request. The day's AUDIT ceiling is taken only by a request
-    // that would actually run an audit (an address on the preview list): a lead spends nothing and must not use it.
+    // request. An allowed attempt is counted here against the per-person and hourly limits, so a request that fails
+    // later still used its turn. Those limits apply to every request. The day's AUDIT ceiling is taken only by a
+    // request that would actually run an audit (an address on the preview list), and that slot is given back
+    // (giveBack) if the audit is not admitted after all: a lead, including one made because the queue is full, spends none.
     const listed = isPreviewEmail(userEmail);
     const limit = auditLimiter.check(clientIp(request.headers), userEmail, { audit: listed });
+    // an allowed check of a listed address took one of the day's audit slots; it is given back unless the audit is admitted
+    holdsSlot = listed && limit.allowed;
     // the audit ceiling is used up (or the limiter failed closed): the request becomes a lead, below
     const ceilingHit = !limit.allowed && limit.cause === 'daily';
     if (!limit.allowed && !ceilingHit) {
@@ -101,6 +121,7 @@ export async function POST(request: NextRequest) {
     const retryAfter = !limit.allowed && limit.retryAfterSeconds ? { 'Retry-After': String(limit.retryAfterSeconds) } : undefined;
 
     const configMissing = (name: string) => {
+      giveBack();
       console.error(`[Audit] ${requestId} config missing: ${name}`);
       return NextResponse.json({ success: false, error: 'CONFIG_ERROR', message: CONFIG_ERROR_MESSAGE, requestId }, { status: 500 });
     };
@@ -118,10 +139,13 @@ export async function POST(request: NextRequest) {
       if (!process.env.ANTHROPIC_API_KEY) return configMissing('ANTHROPIC_API_KEY');
       if (!process.env.RESEND_API_KEY) return configMissing('RESEND_API_KEY');
       // a place to run or to wait; none left (or a cluster worker): the request is passed on as a lead
-      if (!auditQueue.reserve()) leadReason = 'queue';
+      if (auditQueue.reserve()) holdsPlace = true;
+      else leadReason = 'queue';
     }
 
     if (leadReason) {
+      // a lead is not an audit: it spends none of the day's audit slots (a queue lead gives back the one it took)
+      giveBack();
       // lead emails have their own daily cap (limits.ts takeLead), so the form cannot flood an inbox
       if (!auditLimiter.takeLead()) {
         console.warn(`[Audit] ${requestId} rate limited: lead cap`);
@@ -162,7 +186,7 @@ export async function POST(request: NextRequest) {
     const lead = { userEmail, userName, websiteUrl: siteUrl, niche, adminEmail };
     const told = await sendAcceptMail(lead);
     if (!told.sent) {
-      auditQueue.release();
+      giveBack();
       console.error(`[Audit] ${requestId} accept mail failed: ${told.error}`);
       return NextResponse.json({ success: false, error: 'EMAIL_FAILED', message: NOT_PASSED_ON_MESSAGE, requestId }, { status: 502 });
     }
@@ -172,10 +196,14 @@ export async function POST(request: NextRequest) {
     scheduleAfterResponse(async () => {
       await auditQueue.run(() => runAuditJob({ ...lead, requestId, businessType }));
     });
+    // admitted: the place is now the queue's to give back, and the slot is spent
+    holdsPlace = false;
+    holdsSlot = false;
 
     // answered at once, with no time promised
     return NextResponse.json({ success: true, accepted: true, message: ACCEPT_MESSAGE }, { status: 202 });
   } catch (error) {
+    giveBack();
     console.error(`[Audit] ${requestId} error: ${errorCode(error)}`);
     return NextResponse.json(
       {

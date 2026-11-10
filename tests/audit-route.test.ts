@@ -328,6 +328,76 @@ describe('POST /api/audit/generate', () => {
       expect(vi.mocked(fetchWebsiteContent)).toHaveBeenCalledTimes(8)
       expectNoPii(logs, { includeLog: true })
     })
+
+    it('a listed request made into a lead because the queue is full spends none of the day\'s audit slots', async () => {
+      // ten audits a day; seven fill the queue, then three listed requests find it full
+      vi.stubEnv('AUDIT_DAILY_LIMIT', '10')
+      vi.stubEnv('AUDIT_PREVIEW_EMAILS', Array.from({ length: 20 }, (_, i) => `visitor${i}@example.test`).join(','))
+      send.mockResolvedValue(resendOk())
+      const gates: Array<() => void> = []
+      vi.mocked(fetchWebsiteContent).mockImplementation(async () => {
+        await new Promise<void>((open) => gates.push(open))
+        return { pages: [] }
+      })
+      const running: Array<Promise<void>> = []
+      for (let i = 0; i < 7; i++) {
+        expect((await POST(postJson(URL_, visitor(i), from(`203.0.113.${i}`)))).status).toBe(202)
+        running.push(...held.splice(0).map((run) => run()))
+      }
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(auditQueue.stats()).toEqual({ held: 7, running: 2, waiting: 5 })
+
+      for (let i = 7; i < 10; i++) {
+        const res = await POST(postJson(URL_, visitor(i), from(`203.0.113.${i}`)))
+        expect(res.status).toBe(202)
+        expect(await res.json()).toEqual({ success: true, preview: true, message: PREVIEW })
+      }
+      expect(held).toHaveLength(0)
+      // the leads hold no queue place either
+      expect(auditQueue.stats()).toEqual({ held: 7, running: 2, waiting: 5 })
+
+      // free the queue
+      while (gates.length || auditQueue.stats().held) {
+        gates.shift()?.()
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+      await Promise.all(running)
+      expect(auditQueue.stats()).toEqual({ held: 0, running: 0, waiting: 0 })
+
+      // seven audits were admitted, so exactly three of the ten slots are left: the three leads took none
+      vi.mocked(fetchWebsiteContent).mockImplementation(async () => ({ pages: [] }))
+      for (let i = 10; i < 13; i++) {
+        const res = await post(postJson(URL_, visitor(i), from(`203.0.113.${i}`)))
+        expect(await res.json()).toMatchObject({ accepted: true })
+      }
+      expect(vi.mocked(fetchWebsiteContent)).toHaveBeenCalledTimes(10)
+      // and the eleventh audit of the day is past the ceiling
+      const past = await post(postJson(URL_, visitor(13), from('203.0.113.13')))
+      expect(past.status).toBe(429)
+      expect(await past.json()).toMatchObject({ leadSent: true })
+      expect(vi.mocked(fetchWebsiteContent)).toHaveBeenCalledTimes(10)
+    })
+
+    it('a request that fails before it is admitted gives back its queue place and its audit slot', async () => {
+      vi.stubEnv('AUDIT_DAILY_LIMIT', '1')
+      // the accept mail fails: not admitted
+      send.mockResolvedValueOnce(resendErr())
+      expect((await post(postJson(URL_, body, from('203.0.113.20')))).status).toBe(502)
+      expect(auditQueue.stats()).toEqual({ held: 0, running: 0, waiting: 0 })
+      // handing the work on throws, after the place and the slot were taken: not admitted
+      send.mockResolvedValue(resendOk())
+      setRunLater(() => {
+        throw new TypeError('after broke')
+      })
+      expect((await post(postJson(URL_, body, from('203.0.113.21')))).status).toBe(500)
+      expect(auditQueue.stats()).toEqual({ held: 0, running: 0, waiting: 0 })
+      setRunLater((work) => void held.push(work))
+      expect(vi.mocked(runAudit)).not.toHaveBeenCalled()
+      // the one slot of the day is still there, and the audit runs
+      send.mockResolvedValue(resendOk())
+      expect(await (await post(postJson(URL_, body, from('203.0.113.22')))).json()).toMatchObject({ accepted: true })
+      expect(vi.mocked(runAudit)).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('[fold 3] the server-normalised URL is used downstream, and never logged', () => {

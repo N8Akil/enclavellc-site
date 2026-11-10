@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MAX_LINK_CHECKS, MAX_LINKED_PAGES, PAGE_TEXT_CAP, TOTAL_TEXT_CAP, TRUNCATION_MARKER } from '@/lib/audit/config'
-import { countSitemapLocs, extractPage, fetchWebsiteContent, readRobots, validateUrl } from '@/lib/audit/fetch-website'
+import { countSitemapLocs, extractPage, fetchWebsiteContent, readRobots, sameSite, validateUrl } from '@/lib/audit/fetch-website'
 import { UnsafeUrlError, type ResolvedAddress, type Transport, type TransportRequest } from '@/lib/audit/safe-fetch'
 
 // No socket and no DNS: the resolver and transport are stand-ins.
@@ -308,7 +308,11 @@ describe('fetchWebsiteContent', () => {
     const requested = s.calls.map((c) => c.url.href)
     // never requested: mailto, tel, javascript, the other host's own links, the odd port, the credentials, the router
     for (const url of requested) expect(url).toMatch(/^https?:\/\/(x|other)\.example\.test\//)
-    expect(requested.filter((u) => u.includes('other.example.test'))).toEqual(['https://other.example.test/x'])
+    // a page read that redirects to another host stops at the redirect: the other host is never requested
+    expect(requested.filter((u) => u.includes('other.example.test'))).toEqual([])
+    expect(s.resolver.mock.calls.map(([host]) => host)).not.toContain('other.example.test')
+    // and the two links that redirect off the site are recorded as such (the metadata address is another host too)
+    expect(result.offSitePages).toEqual(['https://x.example.test/away', 'https://x.example.test/inward'])
     // the pdf is never read as a page; it is only asked whether it answers (HEAD), like any link on the site's own host
     expect(s.pageCalls().map((c) => c.url.href)).not.toContain('https://x.example.test/brochure.pdf')
     expect(s.calls.filter((c) => c.url.pathname === '/brochure.pdf').map((c) => c.method)).toEqual(['HEAD'])
@@ -325,6 +329,78 @@ describe('fetchWebsiteContent', () => {
     })
     const result = await fetchWebsiteContent('https://x.example.test', s.options)
     expect(result.pages.map((p) => p.url)).toEqual(['https://www.x.example.test/', 'https://www.x.example.test/about'])
+  })
+
+  describe('a page read never follows a redirect off the site', () => {
+    const page = (title: string, links = '') => `<html><head><title>${title}</title></head><body>${links}</body></html>`
+
+    it('sameSite: the host and its www/apex twin, either way round and in any letter case; nothing else', () => {
+      for (const typed of ['x.example.test', 'www.x.example.test', 'WWW.X.Example.TEST']) {
+        const onSite = sameSite(typed)
+        expect(['x.example.test', 'www.x.example.test', 'X.EXAMPLE.TEST', 'Www.X.example.test'].map(onSite), typed).toEqual([true, true, true, true])
+        expect(['shop.x.example.test', 'www.www.x.example.test', 'example.test', 'x.example.test.evil.test', 'other.example.test', 'wwwx.example.test'].map(onSite), typed).toEqual([false, false, false, false, false, false])
+      }
+      // another subdomain of the same apex is another site
+      expect(sameSite('shop.x.example.test')('x.example.test')).toBe(false)
+      expect(sameSite('shop.x.example.test')('www.shop.x.example.test')).toBe(true)
+    })
+
+    it('a linked page that redirects to another host: that host is never asked, and the page is recorded as leading off the site', async () => {
+      const s = site({
+        'https://x.example.test/': page('Home', '<a href="/about">About</a><a href="/book">Book</a>'),
+        'https://x.example.test/about': page('About'),
+        'https://x.example.test/book': { status: 302, headers: { location: 'https://booking.other.test/x' } },
+        'https://booking.other.test/x': page('OTHER-SITE-TEXT'),
+      })
+      const result = await fetchWebsiteContent('https://x.example.test', s.options)
+      expect(result.pages.map((p) => p.url)).toEqual(['https://x.example.test/', 'https://x.example.test/about'])
+      expect(result.offSitePages).toEqual(['https://x.example.test/book'])
+      expect(s.calls.filter((c) => c.url.host === 'booking.other.test')).toEqual([])
+      expect(s.resolver.mock.calls.map(([host]) => host)).not.toContain('booking.other.test')
+      expect(JSON.stringify(result)).not.toContain('OTHER-SITE-TEXT')
+    })
+
+    it('a linked page that redirects to a different subdomain of the same site is not followed either', async () => {
+      const s = site({
+        'https://x.example.test/': page('Home', '<a href="/shop">Shop</a>'),
+        'https://x.example.test/shop': { status: 301, headers: { location: 'https://shop.x.example.test/' } },
+      })
+      const result = await fetchWebsiteContent('https://x.example.test', s.options)
+      expect(result.offSitePages).toEqual(['https://x.example.test/shop'])
+      expect(s.calls.some((c) => c.url.host === 'shop.x.example.test')).toBe(false)
+      expect(s.resolver.mock.calls.map(([host]) => host)).not.toContain('shop.x.example.test')
+    })
+
+    it('a home page that redirects to another host fails with LEFT_SITE, and that host is never asked', async () => {
+      const s = site({ 'https://x.example.test/': { status: 301, headers: { location: 'https://other.example.test/' } }, 'https://other.example.test/': page('Other') })
+      const error = await fetchWebsiteContent('https://x.example.test', s.options).catch((e) => e)
+      expect(error).toBeInstanceOf(UnsafeUrlError)
+      expect(error.code).toBe('LEFT_SITE')
+      expect(s.calls.map((c) => c.url.href)).toEqual(['https://x.example.test/'])
+      expect(s.resolver.mock.calls.map(([host]) => host)).toEqual(['x.example.test'])
+    })
+
+    it('the www/apex twin is followed both ways: apex -> www and www -> apex, for the home page and for a linked page', async () => {
+      // www -> apex on the home page (apex -> www is the test above)
+      const back = site({
+        'https://www.x.example.test/': { status: 301, headers: { location: 'https://X.example.test/' } },
+        'https://x.example.test/': page('Home', '<a href="/about">About</a>'),
+        'https://x.example.test/about': page('About'),
+      })
+      const result = await fetchWebsiteContent('https://www.x.example.test', back.options)
+      expect(result.pages.map((p) => p.url)).toEqual(['https://x.example.test/', 'https://x.example.test/about'])
+      expect(result.offSitePages).toEqual([])
+
+      // a linked page that sends its visitor to the twin: the twin IS asked (the same site), and it is not "off the site"
+      const twin = site({
+        'https://x.example.test/': page('Home', '<a href="/old">Old</a>'),
+        'https://x.example.test/old': { status: 301, headers: { location: 'https://www.x.example.test/old' } },
+        'https://www.x.example.test/old': page('Old'),
+      })
+      const linked = await fetchWebsiteContent('https://x.example.test', twin.options)
+      expect(twin.pageCalls().map((c) => c.url.href)).toContain('https://www.x.example.test/old')
+      expect(linked.offSitePages).toEqual([])
+    })
   })
 
   it('reads at most ten linked pages, a few at a time', async () => {
@@ -511,6 +587,102 @@ describe('the site besides its pages: robots.txt, the sitemap, the http:// addre
     expect(s.calls.filter((c) => c.url.protocol === 'http:')).toHaveLength(1)
   })
 
+  describe('robots.txt, the sitemap and the http:// probe follow a redirect only within the site', () => {
+    const OTHER = 'elsewhere.example.org'
+    const neverAsked = (s: ReturnType<typeof site>) => {
+      expect(s.calls.filter((c) => c.url.hostname === OTHER)).toEqual([])
+      expect(s.resolver.mock.calls.map(([host]) => host)).not.toContain(OTHER)
+    }
+
+    it('robots.txt redirected to another site: not followed (no lookup, no connection), and "unknown"', async () => {
+      const s = site({
+        'https://x.example.test/': home(),
+        'https://x.example.test/robots.txt': { status: 302, headers: { location: `https://${OTHER}/robots.txt` } },
+        [`https://${OTHER}/robots.txt`]: { headers: TEXT, body: 'User-agent: *\nDisallow: /' },
+      })
+      expect((await fetchWebsiteContent('https://x.example.test', s.options)).probes!.robots).toEqual({ state: 'unknown' })
+      neverAsked(s)
+    })
+
+    it('robots.txt redirected within the site is followed: on the same host it is read, on the www twin it is asked', async () => {
+      const same = site({
+        'https://x.example.test/': home(),
+        'https://x.example.test/robots.txt': { status: 301, headers: { location: '/robots-live.txt' } },
+        'https://x.example.test/robots-live.txt': { headers: TEXT, body: 'User-agent: *\nDisallow: /' },
+      })
+      expect((await fetchWebsiteContent('https://x.example.test', same.options)).probes!.robots).toEqual({ state: 'found', disallowsHome: true, rule: 'Disallow: /' })
+      const twin = site({
+        'https://x.example.test/': home(),
+        'https://x.example.test/robots.txt': { status: 301, headers: { location: 'https://www.x.example.test/robots.txt' } },
+        'https://www.x.example.test/robots.txt': { headers: TEXT, body: 'User-agent: *\nDisallow: /' },
+      })
+      await fetchWebsiteContent('https://x.example.test', twin.options)
+      expect(twin.calls.map((c) => c.url.href)).toContain('https://www.x.example.test/robots.txt')
+    })
+
+    it('the sitemap redirected to another site: not followed (no lookup, no connection), and "unknown"', async () => {
+      const s = site({
+        'https://x.example.test/': home(),
+        'https://x.example.test/sitemap.xml': { status: 302, headers: { location: `https://${OTHER}/sitemap.xml` } },
+        [`https://${OTHER}/sitemap.xml`]: { headers: XML, body: '<urlset><url><loc>https://x.example.test/</loc></url></urlset>' },
+      })
+      expect((await fetchWebsiteContent('https://x.example.test', s.options)).probes!.sitemap).toEqual({ state: 'unknown' })
+      neverAsked(s)
+    })
+
+    it('the sitemap redirected within the site is followed: on the same host it is read, on the www twin it is asked', async () => {
+      const body = '<urlset><url><loc>https://x.example.test/</loc></url><url><loc>https://x.example.test/a</loc></url></urlset>'
+      const same = site({
+        'https://x.example.test/': home(),
+        'https://x.example.test/sitemap.xml': { status: 301, headers: { location: '/sitemap_index.xml' } },
+        'https://x.example.test/sitemap_index.xml': { headers: XML, body },
+      })
+      expect((await fetchWebsiteContent('https://x.example.test', same.options)).probes!.sitemap).toEqual({ state: 'found', locCount: 2 })
+      const twin = site({
+        'https://x.example.test/': home(),
+        'https://x.example.test/sitemap.xml': { status: 301, headers: { location: 'https://www.x.example.test/sitemap.xml' } },
+        'https://www.x.example.test/sitemap.xml': { headers: XML, body },
+      })
+      await fetchWebsiteContent('https://x.example.test', twin.options)
+      expect(twin.calls.map((c) => c.url.href)).toContain('https://www.x.example.test/sitemap.xml')
+    })
+
+    it('the http:// address redirected to another site: not followed (no lookup, no connection), and "unknown"', async () => {
+      const s = site({
+        'https://x.example.test/': home(),
+        'http://x.example.test/': { status: 301, headers: { location: `https://${OTHER}/` } },
+        [`https://${OTHER}/`]: home(),
+      })
+      expect((await fetchWebsiteContent('https://x.example.test', s.options)).probes!.httpsRedirect).toBe('unknown')
+      neverAsked(s)
+    })
+
+    it('the http:// address redirected to https:// on its www twin still "redirects", both ways round', async () => {
+      // http://x.example.test -> https://www.x.example.test (the site answers on www)
+      const toWww = site({
+        'https://x.example.test/': { status: 301, headers: { location: 'https://www.x.example.test/' } },
+        'https://www.x.example.test/': home(),
+        'http://www.x.example.test/': { status: 301, headers: { location: 'https://www.x.example.test/' } },
+      })
+      expect((await fetchWebsiteContent('https://x.example.test', toWww.options)).probes!.httpsRedirect).toBe('redirects')
+      // the probe asks the host that answered: http://www... ; and from the apex typed site, http:// apex -> https:// www
+      const apexToWww = site({
+        'https://x.example.test/': home(),
+        'http://x.example.test/': { status: 301, headers: { location: 'https://www.x.example.test/' } },
+        'https://www.x.example.test/': home(),
+      })
+      expect((await fetchWebsiteContent('https://x.example.test', apexToWww.options)).probes!.httpsRedirect).toBe('redirects')
+      expect(apexToWww.calls.map((c) => c.url.href)).toContain('https://www.x.example.test/')
+      // www -> apex
+      const toApex = site({
+        'https://www.x.example.test/': home(),
+        'http://www.x.example.test/': { status: 301, headers: { location: 'https://x.example.test/' } },
+        'https://x.example.test/': home(),
+      })
+      expect((await fetchWebsiteContent('https://www.x.example.test', toApex.options)).probes!.httpsRedirect).toBe('redirects')
+    })
+  })
+
   it('a site that is itself on http:// is not asked the redirect question', async () => {
     const s = site({ 'http://x.example.test/': home() })
     const { probes, pages } = await fetchWebsiteContent('http://x.example.test', s.options)
@@ -569,9 +741,8 @@ describe('the site besides its pages: robots.txt, the sitemap, the http:// addre
       expect(s.calls.filter((c) => c.method === 'HEAD' && c.url.host !== 'x.example.test')).toEqual([])
       expect(s.calls.some((c) => c.url.host === 'partner.example.test')).toBe(false)
       expect(s.resolver.mock.calls.map(([host]) => host)).not.toContain('partner.example.test')
-      // (the one request to another host here is the PAGE read of /moved-away following its redirect, as page reads
-      // have done since the guard was built; the page it lands on is not part of the site and is dropped)
-      expect(s.calls.filter((c) => c.url.host !== 'x.example.test').map((c) => `${c.method ?? 'GET'} ${c.url.href}`)).toEqual(['GET https://other.example.test/landing'])
+      // nor by a page read: the page read of /moved-away stops at its redirect, so no request at all leaves the site
+      expect(s.calls.filter((c) => c.url.host !== 'x.example.test').map((c) => `${c.method ?? 'GET'} ${c.url.href}`)).toEqual([])
       // no body of a checked link was read: the bodies read are the pages, the two files and the http probe at most
       const linkPaths = new Set(['/gone', '/broken', '/no-head', '/no-head-501', '/forbidden', '/moved-here', '/moved-away', '/file.pdf'])
       expect(s.bodiesRead() - before).toBeLessThanOrEqual(s.calls.filter((c) => !linkPaths.has(c.url.pathname) && c.method !== 'HEAD').length)
