@@ -2,6 +2,9 @@
 // The preview gate. While the free audit is being rebuilt, only the addresses listed in AUDIT_PREVIEW_EMAILS
 // (comma-separated) get the automated report. Everyone else's request becomes a lead for a person to run by hand.
 // FAIL CLOSED: an unset or empty list means nobody gets the automated report.
+// BEFORE THIS GATE IS REMOVED (ruled 2026-11-10, see docs/audit-system/RUNBOOK.md): a stop signal ends an audit in
+// flight with no mail to anyone. On SIGTERM the admin must be mailed the audits in flight (address and URL) before
+// exit, with a test. Until that exists the gate stays.
 import { escapeHtml } from '@/lib/email/escape';
 import type { Niche } from './config';
 import { auditSetting } from './env';
