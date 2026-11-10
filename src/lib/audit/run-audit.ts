@@ -132,14 +132,21 @@ const ANGLE_RUNS = /(?:<\s*){3,}|(?:>\s*){3,}/g;
 // case, with or without spaces, underscores, dots or hyphens between the letters) and runs of three or more angle
 // brackets are removed, AGAIN AND AGAIN until the text stops changing: removing one occurrence can join the
 // pieces around it into another (UNTRUSTED_PAGE_UNTRUSTED_PAGE_CONTENT_CONTENT), and a single pass would leave that.
+//
+// BOUNDS. Each pass is linear, but a text built to need one pass per nesting level makes the whole quadratic, so the
+// input is capped first (MAX_STRIP_INPUT: above any text this module sends, which is capped well below it) and the
+// passes are counted: a text that has not settled after MAX_STRIP_PASSES is dropped whole (''), the safe direction.
+export const MAX_STRIP_INPUT = 20_000;
+export const MAX_STRIP_PASSES = 1_000;
 export function stripDelimiters(text: string, nonce: string): string {
   const code = spelled(nonce);
-  let out = text.normalize('NFKC').replace(INVISIBLE, '');
-  for (;;) {
+  let out = text.slice(0, MAX_STRIP_INPUT).normalize('NFKC').replace(INVISIBLE, '');
+  for (let pass = 0; pass < MAX_STRIP_PASSES; pass++) {
     const next = out.replace(code, '').replace(FIXED_WORDS, '').replace(ANGLE_RUNS, ' ');
     if (next === out) return out;
     out = next;
   }
+  return '';
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -186,8 +193,12 @@ function usable(measurements: Measurements | undefined, nonce: string): UsableMe
 
 export interface SentPage {
   page: FetchedPage;
-  // the page's own words as sent (cleaned, whitespace-normalised), one entry per field: what quotes are checked against
+  // the page's own words as sent (cleaned, whitespace-normalised), one entry per segment (one block of one field):
+  // what quotes are checked against
   own: string[];
+  // the same segments exactly as the page has them (whitespace-normalised only): a quote must be in both, so the
+  // cleaning can never join two of the page's words into a quote the page does not contain
+  literal: string[];
 }
 
 export interface PreparedMessage {
@@ -221,11 +232,23 @@ export function buildUserMessage(
   for (const page of content.pages) {
     const url = clean(page.url);
     if (pages.has(url)) continue;
-    pages.set(url, { page, own: page.segments.map((segment) => squash(clean(segment.value))).filter(Boolean) });
+    pages.set(url, {
+      page,
+      own: page.segments.map((segment) => squash(clean(segment.value))).filter(Boolean),
+      literal: page.segments.map((segment) => squash(segment.value)).filter(Boolean),
+    });
   }
   const sentPages = [...pages.values()].map(({ page }) => page);
-  // facts are computed over exactly the pages that are sent, so "page 2" means the same thing to code and model
-  const factList = computeFacts({ pages: sentPages, probes: content.probes, offSitePages: content.offSitePages }, niche);
+  // facts are computed over exactly the pages that are sent, so "page 2" means the same thing to code and model.
+  // A fact that quotes the page's visible words is checked like any quote: words not found in that page's own
+  // segments (as sent, and as the page has them) drop the fact.
+  const factList = computeFacts({ pages: sentPages, probes: content.probes, offSitePages: content.offSitePages }, niche).filter((fact) => {
+    if (fact.family !== 'says' || fact.markup) return true;
+    const sent = pages.get(clean(fact.pageUrl ?? ''));
+    const quote = squash(fact.quote ?? '');
+    const cleaned = squash(clean(fact.quote ?? ''));
+    return Boolean(sent && quote && cleaned && sent.own.some((words) => words.includes(cleaned)) && sent.literal.some((words) => words.includes(quote)));
+  });
   const facts = new Map(factList.map((fact) => [fact.id, fact]));
   const { measures, screenshot } = usable(options?.measurements, nonce);
 
@@ -256,7 +279,8 @@ export function buildUserMessage(
     close,
   ].join('\n');
 
-  const businessType = squash(clean(options?.businessType || '')).slice(0, 100);
+  // cut BEFORE cleaning: the visitor's text never reaches the strip at more than its own limit
+  const businessType = squash(clean((options?.businessType || '').slice(0, 100))).slice(0, 100);
   const visitorBlock = [
     '=== WHAT THE VISITOR TYPED ===',
     `${open} visitor>>>`,
@@ -495,6 +519,46 @@ export interface EvidenceContext {
   screen: boolean;
 }
 
+// The facts about the home page itself: its page facts (@1), its title and description lengths, its sharing
+// details, its business name, and any words the code quoted from it.
+const HOME_FACT_IDS = new Set(['title_length', 'description_length', 'no_og_title', 'no_og_image', 'business_name']);
+function isHomeFact(fact: Fact, context: EvidenceContext): boolean {
+  if (fact.id.endsWith('@1') || HOME_FACT_IDS.has(fact.id)) return true;
+  const home = context.pages.get([...context.pages.keys()][0]);
+  return fact.family === 'says' && Boolean(home) && fact.pageUrl === home!.page.url;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Numbers in the model's own words
+// ---------------------------------------------------------------------------------------------------------------
+
+// Every number written with digits ("92", "4.5", "1,200"), commas removed.
+const numbersIn = (text: string): string[] => (text.match(/\d+(?:[.,]\d+)*/g) ?? []).map((n) => n.replace(/,/g, ''));
+const evidenceText = (evidence: Evidence): string =>
+  evidence.kind === 'quote' ? evidence.quote : evidence.kind === 'absent' ? evidence.label : evidence.kind === 'screen' ? '' : evidence.text;
+
+// THE MODEL WRITES NO NUMBER OF ITS OWN. Every digit in a printed piece of the model's prose must be a number that
+// is in the evidence printed beside that piece (a quote's words, a fact's or a measure's words, all written by the
+// page or by our code). where-you-stand cites nothing, so it may hold no digit at all; an area's line may use the
+// numbers of that area's printed findings. Returns false at the first number that has no such source: the reply is
+// then refused like a schema miss. NOT covered: numbers written as words ("ten"), and the phone call-outs, which
+// exist only with a screenshot (nothing supplies one yet).
+export function proseNumbersOk(result: AuditResults): boolean {
+  const fits = (prose: string[], evidence: Evidence[]) => {
+    const allowed = new Set(evidence.flatMap((e) => numbersIn(evidenceText(e))));
+    return prose.every((text) => numbersIn(text).every((n) => allowed.has(n)));
+  };
+  if (!fits([result.whereYouStand], [])) return false;
+  for (const item of result.working) if (!fits([item.title, item.line], [item.evidence])) return false;
+  for (const fix of result.fixes) if (!fits([fix.headline, fix.whatWeSaw, fix.whyItMatters, fix.theFix], [fix.evidence])) return false;
+  for (const area of result.areas) {
+    if (!area.assessed) continue;
+    if (!fits([area.line], area.findings.map((f) => f.evidence))) return false;
+    for (const finding of area.findings) if (!fits([finding.text], [finding.evidence])) return false;
+  }
+  return true;
+}
+
 // Returns the evidence to print, or null when it does not check out. `where` says whether this piece of evidence
 // sits in a First impression finding: the one place the "screen" kind is allowed.
 export function verifyEvidence(raw: RawEvidence, context: EvidenceContext, where: { firstImpression: boolean } = { firstImpression: false }): Evidence | null {
@@ -504,15 +568,24 @@ export function verifyEvidence(raw: RawEvidence, context: EvidenceContext, where
     const quote = squash(raw.text);
     // long enough to mean something: a word or two can be found on any page
     if (quote.length < MIN_QUOTE_LENGTH || quote.length > MAX_QUOTE_LENGTH || wordCount(quote) < MIN_QUOTE_WORDS) return null;
-    // case-sensitive, whitespace-normalised, inside ONE field of that page's own words: never our labels, and
-    // never words stitched together across two fields
-    return context.pages.get(pageUrl)!.own.some((words) => words.includes(quote)) ? { kind: 'quote', pageUrl, quote } : null;
+    // First impression is judged from the home page: a quote from any other page does not support it
+    if (where.firstImpression && pageUrl !== [...context.pages.keys()][0]) return null;
+    // case-sensitive, whitespace-normalised, inside ONE block of ONE field of that page's own words: never our
+    // labels, never words stitched together across two fields or two blocks. In the words as sent AND as the page
+    // has them (if the page kept a literal form; older callers' contexts may not have it)
+    const sent = context.pages.get(pageUrl)!;
+    const inOwn = sent.own.some((words) => words.includes(quote));
+    const inLiteral = !sent.literal || sent.literal.some((words) => words.includes(quote));
+    return inOwn && inLiteral ? { kind: 'quote', pageUrl, quote } : null;
   }
 
   if (raw.kind === 'fact') {
     // a fact the code computed, printed in the code's words (or the page's, for words the code picked out)
     const fact = context.facts.get(raw.text.trim().replace(/^\[|\]$/g, ''));
-    return fact ? factEvidence(fact) : null;
+    if (!fact) return null;
+    // First impression: only what the code read on the home page
+    if (where.firstImpression && !isHomeFact(fact, context)) return null;
+    return factEvidence(fact);
   }
 
   if (raw.kind === 'measure') {
@@ -598,6 +671,7 @@ function assemble(input: ToolInput, message: PreparedMessage, websiteUrl: string
   if (fixes.length === 0) return null;
 
   const phoneCallouts: Callout[] = offer.screen && Array.isArray(input.phoneCallouts) ? (input.phoneCallouts as Callout[]) : [];
+  const scriptPages = [...message.pages.values()].filter(({ page }) => page.textUnreadable).length;
 
   return {
     success: true,
@@ -614,6 +688,8 @@ function assemble(input: ToolInput, message: PreparedMessage, websiteUrl: string
     pagesRead: [...message.pages.keys()],
     linksChecked: 0,
     droppedFindings: dropped,
+    // said in "how this was made" only when it happened
+    ...(scriptPages > 0 ? { scriptPages } : {}),
   };
 }
 
@@ -636,7 +712,7 @@ function getClient(): AuditModelClient {
   return defaultClient;
 }
 
-type Miss = 'REFUSAL' | 'MAX_TOKENS' | 'NO_TOOL_CALL' | 'SCHEMA_MISS' | 'NOTHING_SUPPORTED';
+type Miss = 'REFUSAL' | 'MAX_TOKENS' | 'NO_TOOL_CALL' | 'SCHEMA_MISS' | 'NOTHING_SUPPORTED' | 'UNSUPPORTED_NUMBER';
 
 function readReply(response: Anthropic.Message, schema: ReturnType<typeof buildSchema>): ToolInput | Miss {
   if (response.stop_reason === 'refusal') return 'REFUSAL';
@@ -689,12 +765,16 @@ export async function runAudit(
         miss = reply;
       } else {
         const result = assemble(reply, message, websiteUrl);
-        if (result) {
+        if (result && !proseNumbersOk(result)) {
+          // a number of the model's own in printed prose: refused like a schema miss (one retry, then a failure)
+          miss = 'UNSUPPORTED_NUMBER';
+        } else if (result) {
           result.linksChecked = content.probes?.links.checked ?? 0;
           if (result.droppedFindings > 0) console.warn(`${tag} evidence dropped: ${result.droppedFindings}`);
           return result;
+        } else {
+          miss = 'NOTHING_SUPPORTED';
         }
-        miss = 'NOTHING_SUPPORTED';
       }
       // a code and the API's request id only: the reply itself can carry page text
       console.error(`${tag} model reply unusable (attempt ${attempt}): ${miss} req=${requestId}`);

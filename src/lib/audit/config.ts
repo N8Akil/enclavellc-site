@@ -133,3 +133,6 @@ export const FETCH_TIMEOUT_MS = 10_000;
 export const FETCH_MAX_BYTES = 2 * 1024 * 1024;
 export const FETCH_MAX_REDIRECTS = 5;
 export const AUDIT_FETCH_DEADLINE_MS = 45_000;
+// Requests to the audited site per audit, every hop of every request counted (pages, files, probes, link checks,
+// redirects). Past it, what is left to ask ends as unknown.
+export const MAX_SITE_REQUESTS = 60;

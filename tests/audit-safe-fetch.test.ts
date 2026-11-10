@@ -662,12 +662,24 @@ describe('safeCheckLink: one link on the site\'s own host, status only', () => {
   const HOST = 'example.com'
   const dns = { 'example.com': [v4(PUBLIC)], 'other.example.org': [v4(PUBLIC_2)], 'inside.example.com': [v4(PRIVATE)] }
 
-  it.each([200, 204, 403, 404, 410, 500, 503])('reports a %i as it is, with HEAD, without reading any body', async (status) => {
+  it.each([200, 204])('reports a %i as it is, with HEAD alone, without reading any body', async (status) => {
     const h = harness({ 'https://example.com/a': { status, body: 'BODY' } }, dns)
     await expect(safeCheckLink('https://example.com/a', HOST, h.options)).resolves.toEqual({ status, leftHost: false })
     expect(h.calls.map((c) => c.method)).toEqual(['HEAD'])
     expect(h.calls[0].address).toBe(PUBLIC)
     expect(h.chunksServed()).toBe(0)
+  })
+
+  // [P3-15] some servers refuse or mishandle HEAD: an error answer to HEAD is asked again with GET, and the link
+  // counts as broken only when GET says so too
+  it.each([403, 404, 410, 500, 503])('an error %i to HEAD is asked again with GET; GET\'s answer is the one reported, and no body is read', async (status) => {
+    const h = harness({ 'https://example.com/a': { status, body: 'BODY' } }, dns)
+    await expect(safeCheckLink('https://example.com/a', HOST, h.options)).resolves.toEqual({ status, leftHost: false })
+    expect(h.calls.map((c) => c.method)).toEqual(['HEAD', 'GET'])
+    expect(h.chunksServed()).toBe(0)
+    const headOnly = harness({ 'https://example.com/a': { head: status, status: 200, body: 'BODY' } }, dns)
+    await expect(safeCheckLink('https://example.com/a', HOST, headOnly.options)).resolves.toEqual({ status: 200, leftHost: false })
+    expect(headOnly.chunksServed()).toBe(0)
   })
 
   it.each([405, 501])('a server that refuses HEAD with %i is asked once more with GET, and still no body is read', async (head) => {
@@ -688,8 +700,9 @@ describe('safeCheckLink: one link on the site\'s own host, status only', () => {
   it('a redirect that stays on the host is followed, and each hop is vetted again', async () => {
     const h = harness({ 'https://example.com/old': { status: 301, headers: { location: '/new' } }, 'https://example.com/new': { status: 404 } }, dns)
     await expect(safeCheckLink('https://example.com/old', HOST, h.options)).resolves.toEqual({ status: 404, leftHost: false })
-    expect(h.calls.map((c) => `${c.method} ${c.url.pathname} ${c.address}`)).toEqual([`HEAD /old ${PUBLIC}`, `HEAD /new ${PUBLIC}`])
-    expect(h.resolver).toHaveBeenCalledTimes(2)
+    // (the 404 to HEAD is asked again with GET, which follows the same redirect, vetted again)
+    expect(h.calls.map((c) => `${c.method} ${c.url.pathname} ${c.address}`)).toEqual([`HEAD /old ${PUBLIC}`, `HEAD /new ${PUBLIC}`, `GET /old ${PUBLIC}`, `GET /new ${PUBLIC}`])
+    expect(h.resolver).toHaveBeenCalledTimes(4)
   })
 
   it.each([
@@ -759,3 +772,37 @@ describe('safeCheckLink: one link on the site\'s own host, status only', () => {
   })
 })
 
+
+describe('[RULE 3, RULE 9] what an answer says, what is asked for, and how many requests', () => {
+  const dns = { 'example.com': [v4(PUBLIC)], 'www.example.com': [v4(PUBLIC)] }
+
+  it('an HTTP_STATUS refusal carries the status, and whether it answered on another host than the one asked; never the host', async () => {
+    const h = harness({ 'https://example.com/sitemap.xml': { status: 403 } }, dns)
+    const error = await refusal(safeFetchPage('https://example.com/sitemap.xml', { ...h.options, allowedContentTypes: XML_TYPES }))
+    expect(error).toMatchObject({ code: 'HTTP_STATUS', status: 403, hostChanged: false })
+    expect(JSON.stringify(error)).not.toMatch(/example/)
+    const moved = harness({ 'https://example.com/s.xml': { status: 301, headers: { location: 'https://www.example.com/s.xml' } }, 'https://www.example.com/s.xml': { status: 404 } }, dns)
+    expect(await refusal(safeFetchPage('https://example.com/s.xml', { ...moved.options, allowedContentTypes: XML_TYPES }))).toMatchObject({ status: 404, hostChanged: true })
+  })
+
+  it('a read asks for exactly the types it accepts: a sitemap read does not ask for HTML', async () => {
+    const h = harness({ 'https://example.com/sitemap.xml': { headers: { 'content-type': 'application/xml' }, body: '<urlset/>' }, 'https://example.com/': { body: '<html></html>' } }, dns)
+    await safeFetchPage('https://example.com/sitemap.xml', { ...h.options, allowedContentTypes: XML_TYPES })
+    await safeFetchPage('https://example.com/', h.options)
+    expect(h.calls.map((c) => c.headers.Accept)).toEqual(['application/xml,text/xml', 'text/html,application/xhtml+xml'])
+  })
+
+  it('a shared request budget: each hop takes one before it is resolved; at zero nothing is resolved or connected', async () => {
+    const h = harness({ 'https://example.com/a': { status: 302, headers: { location: '/b' } }, 'https://example.com/b': { body: '<html></html>' } }, dns)
+    const budget = { remaining: 3 }
+    await safeFetchPage('https://example.com/a', { ...h.options, requestBudget: budget })
+    expect(budget.remaining).toBe(1)
+    expect((await refusal(safeFetchPage('https://example.com/a', { ...h.options, requestBudget: budget }))).code).toBe('OVER_BUDGET')
+    // the first hop of the second request took the last one; its redirect hop was refused before any lookup
+    expect(h.resolver).toHaveBeenCalledTimes(3)
+    expect(h.calls).toHaveLength(3)
+    expect(budget.remaining).toBe(0)
+    expect((await refusal(safeCheckLink('https://example.com/a', 'example.com', { ...h.options, requestBudget: budget }))).code).toBe('OVER_BUDGET')
+    expect(h.calls).toHaveLength(3)
+  })
+})

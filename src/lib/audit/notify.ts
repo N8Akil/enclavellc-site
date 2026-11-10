@@ -3,14 +3,19 @@
 // accepted, and the two mails sent when an audit could not be finished. (The report mails are in send-emails.ts,
 // the lead mail in preview.ts.) Failures come back as codes only: the provider's messages can echo the addresses.
 import { escapeHtml } from '@/lib/email/escape';
-import { getResendClient } from '@/lib/email/resend-client';
 import type { Niche } from './config';
+import { sendMail, type Mail } from './mail';
 
 // What the visitor is told at once, and what they are told if the audit cannot be finished. No time is promised.
 export const ACCEPT_MESSAGE = "We're on it. Your audit will be in your inbox shortly.";
 export const FAILURE_MESSAGE = 'We could not finish your audit automatically. Nate has your request and will send it himself.';
 export const ACCEPT_LINE = 'Audit requested. It is running now; you will get the result, or a second mail if it fails.';
 export const FAILURE_LINE = 'An audit could not be finished automatically: run it by hand. The visitor has been told you will send it.';
+// when the report mail to the visitor was attempted and not confirmed: they may have it, so they are told nothing
+export const REPORT_UNCONFIRMED_LINE =
+  'An audit finished, but its report mail to the visitor was not confirmed (it may or may not have arrived). The visitor has NOT been told anything: check with them, and send the report by hand if they do not have it.';
+// the request was accepted (the accept mail went out) but its work could not be started
+export const NOT_STARTED_CODE = 'start: accepted, then could not be started';
 
 export const nicheWords = (niche: Niche): string => (niche === 'home_care' ? 'home care agency' : 'general small business');
 
@@ -24,16 +29,8 @@ export interface Lead {
 
 type Sent = { sent: true } | { sent: false; error: string };
 
-async function sendOne(who: 'admin' | 'user', mail: { from: string; to: string; subject: string; html: string }): Promise<Sent> {
-  try {
-    const { data, error } = await getResendClient().emails.send(mail);
-    if (error) return { sent: false, error: `${who}: ${error.statusCode ?? '-'} ${error.name}` };
-    if (!data?.id) return { sent: false, error: `${who}: no id` };
-    return { sent: true };
-  } catch (error) {
-    return { sent: false, error: `${who}: threw ${error instanceof Error ? error.name : typeof error}` };
-  }
-}
+// one send, with the time limit of sendMail
+const sendOne = (who: 'admin' | 'user', mail: Mail): Promise<Sent> => sendMail(who, mail);
 
 // The lead as the admin reads it. Everything in it comes from the visitor: escaped, and the address is text, not a link.
 function leadHtml(title: string, line: string, lead: Lead, extra = ''): string {
@@ -63,10 +60,17 @@ export function sendAcceptMail(lead: Lead): Promise<Sent> {
 }
 
 // One honest mail to the visitor and one to the admin with the failure code. Each is attempted whatever
-// happened to the other.
-export async function sendFailureMails(lead: Lead, code: string): Promise<{ userSent: boolean; adminSent: boolean; errors: string[] }> {
+// happened to the other. With visitor: false (the report mail to the visitor was already attempted, so they may
+// have it) only the admin is written to, and told that the visitor was told nothing: one audit never sends the
+// visitor both a report and a failure mail.
+export async function sendFailureMails(
+  lead: Lead,
+  code: string,
+  options: { visitor?: boolean } = {}
+): Promise<{ userSent: boolean; adminSent: boolean; errors: string[] }> {
+  const toVisitor = options.visitor !== false;
   const name = escapeHtml(lead.userName?.slice(0, 100) || 'there');
-  const user = await sendOne('user', {
+  const user: Sent = !toVisitor ? { sent: false, error: 'user: not sent (report mail already attempted)' } : await sendOne('user', {
     from: 'Enclave LLC <audits@enclavellc.net>',
     to: lead.userEmail,
     subject: 'About your website audit',
@@ -85,11 +89,11 @@ export async function sendFailureMails(lead: Lead, code: string): Promise<{ user
     from: 'Enclave Audit System <audits@enclavellc.net>',
     to: lead.adminEmail,
     subject: 'Audit failed: run it by hand',
-    html: leadHtml('Audit failed', FAILURE_LINE, lead, `\n  <p><strong>Failure code:</strong> ${escapeHtml(code)}</p>`),
+    html: leadHtml('Audit failed', toVisitor ? FAILURE_LINE : REPORT_UNCONFIRMED_LINE, lead, `\n  <p><strong>Failure code:</strong> ${escapeHtml(code)}</p>`),
   });
   return {
     userSent: user.sent,
     adminSent: admin.sent,
-    errors: [user, admin].flatMap((result) => (result.sent ? [] : [result.error])),
+    errors: (toVisitor ? [user, admin] : [admin]).flatMap((result) => (result.sent ? [] : [result.error])),
   };
 }

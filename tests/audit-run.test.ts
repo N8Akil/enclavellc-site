@@ -22,6 +22,9 @@ import {
   createAuditClient,
   newNonce,
   renderSystemPrompt,
+  MAX_STRIP_INPUT,
+  MAX_STRIP_PASSES,
+  proseNumbersOk,
   runAudit,
   stripDelimiters,
   verifyEvidence,
@@ -481,7 +484,8 @@ describe('runAudit', () => {
   describe('with an injected measurement', () => {
     it('Speed is offered and scored, and a "measure" finding prints the injected words, never the model\'s number', async () => {
       const input = toolInput({ ...SCORES, speed: 6 })
-      input.areas[2].findings = [{ text: 'It loads in 0.3 seconds, which is excellent.', evidence: measure('load_time') }]
+      // (RULE 10: the finding's own number must be the measure's; a number of the model's own is refused, tested below)
+      input.areas[2].findings = [{ text: 'The main content takes 4.2 seconds to appear.', evidence: measure('load_time') }]
       const c = client(toolReply(input))
       const result = ok(await run(c, content(), MEASURES))
 
@@ -625,7 +629,8 @@ describe('runAudit', () => {
       const input = inputQuoting(HOME, 'Open six days a week for you and your family.')
       input.areas.splice(2, 0, { key: 'speed', score: 6, line: 'Measured.', findings: [] })
       for (const a of input.areas) {
-        a.findings = [1, 2, 3].map((rank) => ({
+        // (the ranks are words: RULE 10 refuses a digit the evidence does not hold)
+        a.findings = ['one', 'two', 'three'].map((rank) => ({
           text: `${a.key} finding ${rank}`,
           evidence: a.key === 'speed' ? measure('load_time') : quote(HOME, 'Open six days a week for you and your family.'),
         }))
@@ -634,11 +639,11 @@ describe('runAudit', () => {
       const kept = assessed(result).map((a) => a.findings.map((f) => f.text))
       expect(kept.flat()).toHaveLength(9)
       expect(kept).toEqual([
-        ['found finding 1', 'found finding 2'],
-        ['first_impression finding 1', 'first_impression finding 2'],
-        ['speed finding 1', 'speed finding 2'],
-        ['next_step finding 1', 'next_step finding 2'],
-        ['trust finding 1'],
+        ['found finding one', 'found finding two'],
+        ['first_impression finding one', 'first_impression finding two'],
+        ['speed finding one', 'speed finding two'],
+        ['next_step finding one', 'next_step finding two'],
+        ['trust finding one'],
       ])
       // the cut is not a drop: nothing was unsupported
       expect(result.droppedFindings).toBe(0)
@@ -674,10 +679,10 @@ describe('runAudit', () => {
       const strip = (prompt: string) => prompt.replace(/WHO THE SITE IS FOR\n[^\n]*\n/, '').replace(/[0-9a-f]{32}/g, 'N')
       expect(strip(hp.system)).toBe(strip(gp.system))
       // the home-care facts are in the list for home care only
+      // (RULE 1: the home-care words are positive-only, so a page without them gives no word_ fact at all)
       expect(hp.messages[0].content).toContain('[no_careers_link]')
-      expect(hp.messages[0].content).toContain('[no_word_insured]')
       expect(gp.messages[0].content).not.toContain('careers')
-      expect(gp.messages[0].content).not.toContain('no_word_')
+      expect(gp.messages[0].content).not.toContain('word_')
     })
 
     it('a home-care fact cited by the model is printed as what the page says or as not found, in the code\'s words', async () => {
@@ -685,18 +690,25 @@ describe('runAudit', () => {
       const input = inputQuoting(HOME, 'All our caregivers are insured and bonded for your peace of mind.')
       input.areas[3].findings = [
         { text: 'You say your caregivers are insured.', evidence: fact('word_insured') },
-        { text: 'We did not find how care is paid for.', evidence: fact('no_payer_words') },
+        { text: 'You say your caregivers are bonded.', evidence: fact('word_bonded') },
+        // [RULE 1] positive-only: a word the page does not use has no fact to cite, so this one is dropped
         { text: 'We did not find the word licensed.', evidence: fact('no_word_licensed') },
       ]
       const result = ok(await run(client(toolReply(input)), site, undefined, 'home_care'))
       expect((area(result, 'trust') as AssessedArea).findings.map((f) => f.evidence)).toEqual([
         { kind: 'quote', pageUrl: HOME, quote: 'All our caregivers are insured and bonded for your peace of mind.' },
-        { kind: 'absent', label: 'how care is paid for (Medicaid, private pay, long-term care insurance or VA)' },
-        { kind: 'absent', label: 'the words "licensed" or "registered"' },
+        { kind: 'quote', pageUrl: HOME, quote: 'All our caregivers are insured and bonded for your peace of mind.' },
       ])
+      expect(result.droppedFindings).toBe(1)
+      // the structural home-care absence is printed in the code's words
+      const noCareers = onePage('<p>All our caregivers are insured and bonded for your peace of mind.</p>')
+      const asked = inputQuoting(HOME, 'All our caregivers are insured and bonded for your peace of mind.')
+      asked.areas[3].findings = [{ text: 'There is no way to apply.', evidence: fact('no_careers_link') }]
+      const printed = ok(await run(client(toolReply(asked)), noCareers, undefined, 'home_care'))
+      expect((area(printed, 'trust') as AssessedArea).findings[0].evidence).toEqual({ kind: 'absent', label: 'a careers or apply link' })
       // the same ids do not exist for a general audit
       const general = inputQuoting(HOME, 'All our caregivers are insured and bonded for your peace of mind.')
-      general.areas[3].findings.push({ text: 'x', evidence: fact('no_payer_words') })
+      general.areas[3].findings.push({ text: 'x', evidence: fact('word_insured') })
       expect(ok(await run(client(toolReply(general)), site, undefined, 'general')).droppedFindings).toBe(1)
     })
   })
@@ -975,23 +987,24 @@ describe('runAudit', () => {
         const insecure: WebsiteContent = { pages: [{ ...site.pages[0], url: 'http://garrett.example.test/', facts: { ...site.pages[0].facts, isHttps: false } }] }
         const home = 'http://garrett.example.test/'
         const input = inputQuoting(home, 'We paint houses in Dayton and nearby.')
-        const ids = ['not_https', 'no_title@1', 'no_meta_description@1', 'no_h1@1']
-        input.areas[0].findings = ids.slice(0, 3).map((id) => ({ text: `Missing: ${id}`, evidence: fact(id) }))
-        input.areas[3].findings = ['not_https', 'no_privacy_link'].map((id) => ({ text: `Missing: ${id}`, evidence: fact(id) }))
-        input.areas[2].findings = ['no_tel_link', 'no_mailto_link', 'no_hours'].map((id) => ({ text: `Missing: ${id}`, evidence: fact(id) }))
+        // (the prose has no digits: RULE 10. The http:// home page is no https fact by itself: RULE 2)
+        const text = (id: string) => `Missing: ${id.replace(/@\d+$/, '')}`
+        input.areas[0].findings = ['no_title@1', 'no_meta_description@1', 'no_h1@1'].map((id) => ({ text: text(id), evidence: fact(id) }))
+        input.areas[3].findings = ['no_privacy_link'].map((id) => ({ text: text(id), evidence: fact(id) }))
+        input.areas[2].findings = ['no_tel_link', 'no_mailto_link', 'no_form'].map((id) => ({ text: text(id), evidence: fact(id) }))
         const result = ok(await run(client(toolReply(input)), insecure))
         const labels = assessed(result).flatMap((a) => a.findings.flatMap((f) => (f.evidence.kind === 'absent' ? [f.evidence.label] : [])))
         expect(labels).toEqual([
-          'a secure https:// address',
           'a page title on /',
           'a description for search results (meta description) on /',
+          'a main heading (H1) on /',
           'a phone number that can be tapped to call (a tel: link)',
           'an email address that can be tapped to write (a mailto: link)',
-          'opening hours or the times you answer',
-          'a secure https:// address',
+          'a form',
           'a link to a privacy policy',
         ])
         expect(result.droppedFindings).toBe(0)
+        expect(buildUserMessage(insecure, home, {}, NONCE).facts.has('not_https')).toBe(false)
       })
     })
 
@@ -1354,5 +1367,142 @@ describe('runAudit', () => {
       expect(await run(c, { pages: [] })).toMatchObject({ success: false })
       expect(c.create).not.toHaveBeenCalled()
     })
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------
+// The review's rulings
+// ---------------------------------------------------------------------------------------------------------------
+
+describe('[RULE 10] the model writes no number of its own', () => {
+  // the home title is 41 characters long: a fact the code counted
+  const withTitleFinding = (text: string) => {
+    const input = toolInput()
+    input.areas[0].findings = [{ text, evidence: fact('title_length') }]
+    return input
+  }
+
+  it('a number that is in the cited evidence is allowed; one that is not refuses the reply (one retry, then a failure)', async () => {
+    expect(ok(await run(client(toolReply(withTitleFinding('Your title runs to 41 characters.')))))).toBeTruthy()
+    await refused(withTitleFinding('Your title is 92 characters long.'))
+  })
+
+  it.each([
+    ['a score out of ten in where-you-stand', (i: Input) => void (i.whereYouStand = 'A solid site, about 8/10 overall.')],
+    ['any digit at all in where-you-stand (it cites nothing)', (i: Input) => void (i.whereYouStand = 'Three fixes, 3 easy wins.')],
+    ['a percentage in a fix', (i: Input) => void (i.fixes[0].whyItMatters = 'Most visitors (70%) never scroll.')],
+    ['a time in a strength', (i: Input) => void (i.working[0].line = 'It loads in 2 seconds on a phone.')],
+    ['a size in an area line', (i: Input) => void (i.areas[1].line = 'The page weighs 4 MB.')],
+    ['a count in a finding that cites a quote without it', (i: Input) => void (i.areas[0].findings[1].text = 'You have 5 broken links.')],
+  ])('%s is refused', async (_, change) => {
+    const input = toolInput()
+    change(input)
+    await refused(input)
+  })
+
+  it('the numbers of the page\'s own quote are the item\'s to use: the team quote says 20 years', async () => {
+    const input = toolInput()
+    input.fixes[2].whatWeSaw = 'The About page gives your 20 years one short line.'
+    expect(ok(await run(client(toolReply(input)))).fixes[2].whatWeSaw).toContain('20 years')
+  })
+
+  it('proseNumbersOk itself: an area line may use its printed findings\' numbers, nothing else', () => {
+    const results = (line: string) =>
+      ({
+        whereYouStand: 'Plain words.',
+        working: [],
+        fixes: [],
+        areas: [{ key: 'trust', name: 'Trust', assessed: true, score: 6, status: 'Needs Improvement', weight: 0.15, line, findings: [{ text: 'Some links fail.', evidence: { kind: 'counted', text: '3 of the 18 links we checked on your own site answered with an error' } }] }],
+      }) as unknown as AuditResults
+    expect(proseNumbersOk(results('3 of 18 links fail.'))).toBe(true)
+    expect(proseNumbersOk(results('4 of 18 links fail.'))).toBe(false)
+    expect(proseNumbersOk(results('1,800 links fail.'))).toBe(false)
+  })
+})
+
+describe('[P3-3, P3-4, P3-5] quotes: one block, the page\'s literal words, and First impression from the home page', () => {
+  it('[P3-3] a quote that runs from a heading into the paragraph after it is refused', async () => {
+    const site = onePage('<h2>Caring for Dayton families</h2><p>Every visit starts with a friendly hello.</p>')
+    const across = 'Caring for Dayton families Every visit starts'
+    await refused(inputQuoting(HOME, across), site)
+    expect(ok(await run(client(toolReply(inputQuoting(HOME, 'Every visit starts with a friendly hello.'))), site))).toBeTruthy()
+  })
+
+  it('[P3-4] a quote the page holds only after our cleaning joined two of its words is refused', async () => {
+    // the page writes the fixed delimiter word between two words; cleaning removes it, and the words run together
+    const site = onePage('<p>We repair old roofs UNTRUSTED_PAGE_CONTENT across the whole county every week.</p>')
+    const { pages } = buildUserMessage(site, SITE, {}, NONCE)
+    const sent = pages.get(HOME)!
+    const joined = 'We repair old roofs across the whole county'
+    expect(sent.own.some((w) => w.includes(joined))).toBe(true)
+    expect(sent.literal.some((w) => w.includes(joined))).toBe(false)
+    await refused(inputQuoting(HOME, joined), site)
+  })
+
+  it('[P3-5] First impression rests on the home page: a quote from another page, or a site-wide fact, is dropped there', () => {
+    const { pages, facts } = buildUserMessage(content(), SITE, {}, NONCE)
+    const context = { pages, facts, measures: new Map<string, string>(), screen: false }
+    const first = { firstImpression: true }
+    expect(verifyEvidence({ kind: 'quote', pageUrl: HOME, text: Q.heading }, context, first)).toMatchObject({ kind: 'quote' })
+    expect(verifyEvidence({ kind: 'quote', pageUrl: ABOUT, text: Q.team }, context, first)).toBeNull()
+    expect(verifyEvidence({ kind: 'quote', pageUrl: ABOUT, text: Q.team }, context)).toMatchObject({ kind: 'quote' })
+    expect(verifyEvidence({ kind: 'fact', pageUrl: '', text: 'title_length' }, context, first)).toMatchObject({ kind: 'counted' })
+    expect(verifyEvidence({ kind: 'fact', pageUrl: '', text: 'no_og_image' }, context, first)).toMatchObject({ kind: 'absent' })
+    expect(verifyEvidence({ kind: 'fact', pageUrl: '', text: 'no_title@2' }, context, first)).toBeNull()
+    expect(verifyEvidence({ kind: 'fact', pageUrl: '', text: 'no_form' }, context, first)).toBeNull()
+    expect(verifyEvidence({ kind: 'fact', pageUrl: '', text: 'no_form' }, context)).toMatchObject({ kind: 'absent' })
+  })
+})
+
+describe('[RULE 4] a fact that quotes the page is checked like any quote', () => {
+  it('words not among the page\'s own visible words drop the fact before the model sees it', () => {
+    const site = onePage('<p>Welcome to the agency home page, glad you came.</p><a href="tel:5551234">Call us today</a>')
+    // a fact whose words the page does not show (as a hidden link's words would be, had they been kept)
+    const page = site.pages[0]
+    const forged: WebsiteContent = { pages: [{ ...page, facts: { ...page.facts, phoneLink: { text: 'Licensed and bonded since 1990', href: 'tel:5551234' } } }] }
+    expect(buildUserMessage(forged, SITE, {}, NONCE).facts.has('tel_link')).toBe(false)
+    expect(buildUserMessage(site, SITE, {}, NONCE).facts.get('tel_link')).toMatchObject({ quote: 'Call us today' })
+  })
+})
+
+describe('[RULE 5] a page built by scripts is said so in "how this was made"', () => {
+  it('scriptPages counts them, only when there are any', async () => {
+    const spa = { pages: [extractPage('<html><head><title>Sunrise Home Care</title></head><body><div id="root">Loading</div><script src="/a.js"></script></body></html>', HOME)] }
+    const input = inputQuoting(HOME, 'Sunrise Home Care')
+    const one = await run(client(toolReply(input), toolReply(input)), spa)
+    // (a title is too short to quote, so this reply is refused: what matters is the count the message carries)
+    expect(one.success).toBe(false)
+    const { pages } = buildUserMessage(spa, SITE, {}, NONCE)
+    expect([...pages.values()].filter(({ page }) => page.textUnreadable)).toHaveLength(1)
+    expect(ok(await run(client(toolReply(toolInput())))).scriptPages).toBeUndefined()
+  })
+})
+
+describe('[RULE 7] the strip is bounded', () => {
+  it('its input is capped, and a text that would need more than the pass limit is dropped whole', () => {
+    expect(stripDelimiters('a'.repeat(MAX_STRIP_INPUT + 500), NONCE)).toHaveLength(MAX_STRIP_INPUT)
+    // the review's shape: nested so each pass removes one level, as many levels as fit in the cap
+    const levels = Math.floor(MAX_STRIP_INPUT / 20)
+    const nested = `${'UNTRUSTEDPAGE'.repeat(levels)}${'CONTENT'.repeat(levels)}`
+    expect(levels).toBeGreaterThanOrEqual(MAX_STRIP_PASSES)
+    const started = Date.now()
+    const out = stripDelimiters(nested, NONCE)
+    expect(Date.now() - started).toBeLessThan(5000)
+    // either it settled with nothing left, or it ran out of passes and dropped the text: never a delimiter left
+    expect(out).toBe('')
+    // a deeper nesting, past the cap, is cut first: still bounded, and still no delimiter left
+    const deeper = stripDelimiters(`${'UNTRUSTEDPAGE'.repeat(15_000)}${'CONTENT'.repeat(15_000)}`, NONCE)
+    expect(deeper).not.toMatch(/UNTRUSTED[\s_.-]*PAGE[\s_.-]*CONTENT/i)
+  })
+
+  it('a 200k-character business type never reaches the strip at more than its limit', () => {
+    const k = 10_000
+    const evil = `${'UNTRUSTEDPAGE'.repeat(k)}${'CONTENT'.repeat(k)}`
+    expect(evil.length).toBeGreaterThan(190_000)
+    const started = Date.now()
+    const message = buildUserMessage(content(), SITE, { businessType: evil }, NONCE)
+    expect(Date.now() - started).toBeLessThan(2000)
+    const line = message.text.split('\n').find((l) => l.startsWith('Business type:'))!
+    expect(line.length).toBeLessThanOrEqual('Business type: '.length + 100)
   })
 })

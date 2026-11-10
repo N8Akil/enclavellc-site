@@ -5,7 +5,7 @@ import { scheduleAfterResponse } from '@/lib/audit/background';
 import { NICHES } from '@/lib/audit/config';
 import { validateUrl } from '@/lib/audit/fetch-website';
 import { auditLimiter, CEILING_LEAD_MESSAGE, clientIp, RATE_LIMIT_MESSAGES } from '@/lib/audit/limits';
-import { ACCEPT_MESSAGE, sendAcceptMail } from '@/lib/audit/notify';
+import { ACCEPT_MESSAGE, FAILURE_MESSAGE, NOT_STARTED_CODE, sendAcceptMail, sendFailureMails } from '@/lib/audit/notify';
 import { runAuditJob } from '@/lib/audit/pipeline';
 import {
   CEILING_LEAD_LINE,
@@ -21,8 +21,9 @@ import { auditQueue } from '@/lib/audit/queue';
 const auditRequestSchema = z.object({
   websiteUrl: z.string().min(1, 'Website URL is required'),
   userEmail: z.string().email('Valid email is required'),
-  userName: z.string().optional(),
-  businessType: z.string().optional(),
+  // bounded here, so nothing downstream ever handles unbounded visitor text (longer is a 400)
+  userName: z.string().max(100, 'Name is too long').optional(),
+  businessType: z.string().max(100, 'Business type is too long').optional(),
   // who the audit is written for; left out means "general", anything else is refused
   niche: z.enum(NICHES, { message: 'Unknown audit type' }).default('general'),
 });
@@ -193,9 +194,23 @@ export async function POST(request: NextRequest) {
 
     // The work, after the response. runAuditJob never throws; the queue gives the place back whatever happens.
     console.log(`[Audit] ${requestId} accepted`);
-    scheduleAfterResponse(async () => {
-      await auditQueue.run(() => runAuditJob({ ...lead, requestId, businessType }));
-    });
+    try {
+      scheduleAfterResponse(async () => {
+        await auditQueue.run(() => runAuditJob({ ...lead, requestId, businessType }));
+      });
+    } catch (error) {
+      // Accepted (the admin's accept mail promised a result or a second mail), but the work cannot be started. Nothing
+      // will run: the place and the slot go back, and both people get the honest failure mails now.
+      giveBack();
+      console.error(`[Audit] ${requestId} could not be started: ${errorCode(error)}`);
+      try {
+        const failed = await sendFailureMails(lead, NOT_STARTED_CODE);
+        for (const problem of failed.errors) console.error(`[Audit] ${requestId} failure mail not sent: ${problem}`);
+      } catch (mailError) {
+        console.error(`[Audit] ${requestId} failure mails threw: ${errorCode(mailError)}`);
+      }
+      return NextResponse.json({ success: false, error: 'NOT_STARTED', message: FAILURE_MESSAGE, requestId }, { status: 500 });
+    }
     // admitted: the place is now the queue's to give back, and the slot is spent
     holdsPlace = false;
     holdsSlot = false;

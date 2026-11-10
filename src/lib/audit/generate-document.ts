@@ -23,6 +23,7 @@ import {
 } from 'docx';
 import * as fs from 'fs';
 import * as path from 'path';
+import { statusFor } from './config';
 import { HOW_MADE_HEADING, areasAssessedPhrase, effortLine, evidenceLine, howMadeText, notAssessedLabel, scoreLine } from './present';
 import type { AreaResult, AuditResults, Evidence } from './types';
 
@@ -41,10 +42,22 @@ const BRAND = {
 };
 
 // Helper: Get score color
+// the colour follows the status label printed beside the score (config.ts statusFor), so the two never disagree
 function getScoreColor(score: number): string {
-  if (score >= 8) return BRAND.SUCCESS;
-  if (score >= 6) return BRAND.WARNING;
+  const status = statusFor(score);
+  if (status === 'Excellent' || status === 'Good') return BRAND.SUCCESS;
+  if (status === 'Needs Improvement') return BRAND.WARNING;
   return BRAND.DANGER;
+}
+
+// Characters a .docx (XML 1.0) cannot hold: C0 controls other than tab, line feed and carriage return, and the two
+// non-characters. Page quotes and the visitor's name can carry them; every string of the results is cleaned of them.
+const NOT_IN_XML = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g;
+function xmlSafe<T>(value: T): T {
+  if (typeof value === 'string') return value.replace(NOT_IN_XML, '') as T;
+  if (Array.isArray(value)) return value.map(xmlSafe) as T;
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, xmlSafe(item)])) as T;
+  return value;
 }
 
 // Load logo image if available
@@ -79,9 +92,10 @@ const tableBorder = { style: BorderStyle.SINGLE, size: 1, color: BRAND.LIGHTER_G
 const cellBorders = { top: tableBorder, bottom: tableBorder, left: tableBorder, right: tableBorder };
 
 export async function generateAuditDocument(
-  auditResults: AuditResults,
+  rawResults: AuditResults,
   options?: { userName?: string }
 ): Promise<Buffer> {
+  const auditResults = xmlSafe(rawResults);
   const {
     websiteUrl,
     overallScore,
@@ -93,7 +107,8 @@ export async function generateAuditDocument(
   } = auditResults;
 
   const generatedDate = new Date();
-  const userName = options?.userName || 'Website Owner';
+  // capped like the emails, and cleaned of what XML cannot hold
+  const userName = xmlSafe(options?.userName?.slice(0, 100) || 'Website Owner');
   const logo = getLogoImage();
 
   const doc = new Document({

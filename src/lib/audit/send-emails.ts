@@ -1,6 +1,7 @@
 // src/lib/audit/send-emails.ts
 import { escapeHtml } from '@/lib/email/escape';
-import { getResendClient } from '@/lib/email/resend-client';
+import { statusFor } from './config';
+import { sendMail, type Mail } from './mail';
 import { HOW_MADE_HEADING, areasAssessedPhrase, assessedAreas, evidenceLine, howMadeText, scoreLine } from './present';
 import type { AuditResults } from './types';
 
@@ -27,7 +28,6 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendE
   const documentBase64 = document.toString('base64');
   const filename = `Website-Audit-${new URL(websiteUrl).hostname}-${new Date().toISOString().split('T')[0]}.docx`;
 
-  const client = getResendClient();
   const attachments = [
     {
       filename,
@@ -36,39 +36,33 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendE
     }
   ];
 
-  // Resend returns { data, error } instead of throwing on API errors, so both results are checked.
-  // The admin send is attempted even if the visitor's failed, so the lead still reaches the inbox.
-  // Failures are reported as codes only: Resend's messages can echo the addresses.
+  // Each send has a time limit (mail.ts). Failures are reported as codes only: Resend's messages can echo the addresses.
+  // The admin's copy, a lead that says the report went out, is sent ONLY once the visitor's report is confirmed
+  // sent. Otherwise the caller writes to the admin once, saying the report was not confirmed (pipeline.ts).
   const failures: string[] = [];
-  const attempt = async (who: 'user' | 'admin', send: () => ReturnType<typeof client.emails.send>): Promise<boolean> => {
-    try {
-      const { data, error } = await send();
-      if (error) failures.push(`${who}: ${error.statusCode ?? '-'} ${error.name}`);
-      else if (!data?.id) failures.push(`${who}: no id`);
-      else return true;
-    } catch (error) {
-      failures.push(`${who}: threw ${error instanceof Error ? error.name : typeof error}`);
-    }
-    return false;
+  const attempt = async (who: 'user' | 'admin', mail: Mail): Promise<boolean> => {
+    const outcome = await sendMail(who, mail);
+    if (!outcome.sent) failures.push(outcome.error);
+    return outcome.sent;
   };
 
   // Send to user
-  const userSent = await attempt('user', () => client.emails.send({
+  const userSent = await attempt('user', {
     from: 'Enclave LLC <audits@enclavellc.net>',
     to: userEmail,
     subject: `Your Website Audit Report for ${websiteUrl} is Ready!`,
     html: generateUserEmailHtml(userName, websiteUrl, auditResults),
     attachments
-  }));
+  });
 
   // Send admin notification
-  const adminSent = await attempt('admin', () => client.emails.send({
+  const adminSent = userSent && await attempt('admin', {
     from: 'Enclave Audit System <audits@enclavellc.net>',
     to: adminEmail,
     subject: `New Audit Lead: ${websiteUrl}`,
     html: generateAdminEmailHtml(userEmail, userName, websiteUrl, auditResults),
     attachments
-  }));
+  });
 
   return failures.length
     ? { success: false, userSent, adminSent, error: failures.join('; ') }
@@ -297,8 +291,10 @@ function generateAdminEmailHtml(
   `.trim();
 }
 
+// the colour follows the status label printed beside the score (config.ts statusFor), so the two never disagree
 function getScoreColor(score: number): string {
-  if (score >= 8) return '#27AE60';
-  if (score >= 6) return '#F39C12';
+  const status = statusFor(score);
+  if (status === 'Excellent' || status === 'Good') return '#27AE60';
+  if (status === 'Needs Improvement') return '#F39C12';
   return '#C0392B';
 }

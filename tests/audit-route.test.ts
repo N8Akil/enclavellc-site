@@ -238,11 +238,15 @@ describe('POST /api/audit/generate', () => {
     it.each([
       ['returns an error', () => send.mockResolvedValueOnce(resendOk()).mockResolvedValueOnce(resendErr()).mockResolvedValue(resendOk())],
       ['throws', () => send.mockResolvedValueOnce(resendOk()).mockRejectedValueOnce(new Error(`ECONNRESET sending to ${LEAD.email}`)).mockResolvedValue(resendOk())],
-    ])('the report cannot be mailed to the visitor (Resend %s): the admin still gets the report, then both failure mails go out', async (_, arrange) => {
+    ])('the report cannot be confirmed to the visitor (Resend %s): the visitor is sent NOTHING more (they may have it), the admin one mail saying so', async (_, arrange) => {
+      // [RULE 8 / P3-11] one audit never mails the visitor both a report and a failure: a send that errors or throws
+      // may still have been delivered
       arrange()
       await post(postJson(URL_, body))
-      expect(mails()).toEqual([ACCEPT_MAIL, ...REPORT_MAILS, ...FAILURE_MAILS])
-      expect(send.mock.calls[4][0].html).toContain('<strong>Failure code:</strong> email: StageFailure REPORT_NOT_SENT')
+      expect(mails()).toEqual([ACCEPT_MAIL, REPORT_MAILS[0], FAILURE_MAILS[1]])
+      expect(send.mock.calls.filter(([mail]) => mail.to === LEAD.email)).toHaveLength(1)
+      expect(send.mock.calls[2][0].html).toContain('<strong>Failure code:</strong> email: StageFailure REPORT_NOT_SENT')
+      expect(send.mock.calls[2][0].html).toContain('The visitor has NOT been told anything')
       expect(loggedText(logs.error)).toMatch(/\[Audit\] [0-9a-f]{8} failed at email: StageFailure REPORT_NOT_SENT/)
       expectNoPii(logs, { includeLog: true })
     })
@@ -429,6 +433,76 @@ describe('POST /api/audit/generate', () => {
       expect(logged).toContain('TypeError')
       expectNothingRan()
       expectNoPii(logs, { includeLog: true })
+    })
+  })
+
+  describe('[RULE 7] the visitor\'s free text is bounded at the door', () => {
+    it.each([
+      ['a 200k-character business type', { businessType: 'UNTRUSTEDPAGE'.repeat(10_000) + 'CONTENT'.repeat(10_000) }],
+      ['a 101-character business type', { businessType: 'b'.repeat(101) }],
+      ['a 101-character name', { userName: 'n'.repeat(101) }],
+    ])('%s is a 400: nothing counted, mailed or run', async (_, extra) => {
+      send.mockResolvedValue(resendOk())
+      const res = await post(postJson(URL_, { ...body, ...extra }))
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toBe('VALIDATION_ERROR')
+      expect(send).not.toHaveBeenCalled()
+      expectNothingRan()
+    })
+
+    it('100 characters of each is accepted', async () => {
+      send.mockResolvedValue(resendOk())
+      expect((await post(postJson(URL_, { ...body, businessType: 'b'.repeat(100), userName: 'n'.repeat(100) }))).status).toBe(202)
+    })
+  })
+
+  describe('[RULE 8] a hung or failed start never leaves anyone without word', () => {
+    it('the work cannot be started after the accept mail went out: both people get the failure mails, the visitor the honest answer', async () => {
+      send.mockResolvedValue(resendOk())
+      setRunLater(() => {
+        throw new TypeError('after() outside a request')
+      })
+      const res = await post(postJson(URL_, body))
+      expect(res.status).toBe(500)
+      expect(await res.json()).toMatchObject({ success: false, error: 'NOT_STARTED', message: COULD_NOT_FINISH })
+      expect(mails()).toEqual([ACCEPT_MAIL, ...FAILURE_MAILS])
+      expect(send.mock.calls[2][0].html).toContain('<strong>Failure code:</strong> start: accepted, then could not be started')
+      expect(auditQueue.stats()).toEqual({ held: 0, running: 0, waiting: 0 })
+      expectNothingRan()
+      expectNoPii(logs, { includeLog: true })
+    })
+
+    it('a hung report send cannot hold a queue place: after 20 seconds the place comes back and the admin is told', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      send.mockResolvedValueOnce(resendOk()).mockReturnValueOnce(new Promise(() => {})).mockResolvedValue(resendOk())
+      const res = await POST(postJson(URL_, body))
+      expect(res.status).toBe(202)
+      const work = runHeld()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(auditQueue.stats().held).toBe(1)
+      await vi.advanceTimersByTimeAsync(20_000)
+      await work
+      expect(auditQueue.stats()).toEqual({ held: 0, running: 0, waiting: 0 })
+      // the visitor's send was attempted once and never followed by a failure mail; the admin got one mail
+      expect(mails()).toEqual([ACCEPT_MAIL, REPORT_MAILS[0], FAILURE_MAILS[1]])
+      expect(send.mock.calls[2][0].html).toContain('email: StageFailure REPORT_NOT_SENT')
+      vi.useRealTimers()
+    })
+
+    it('a hung accept mail ends after 20 seconds as a failed send: 502, and the place and the slot come back', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.stubEnv('AUDIT_DAILY_LIMIT', '1')
+      send.mockReturnValueOnce(new Promise(() => {}))
+      const pending = POST(postJson(URL_, body, from('203.0.113.70')))
+      await vi.advanceTimersByTimeAsync(20_000)
+      const res = await pending
+      expect(res.status).toBe(502)
+      expect(auditQueue.stats()).toEqual({ held: 0, running: 0, waiting: 0 })
+      expect(loggedText(logs.error)).toMatch(/accept mail failed: admin: timeout/)
+      vi.useRealTimers()
+      // the day's one slot is still there
+      send.mockResolvedValue(resendOk())
+      expect(await (await post(postJson(URL_, body, from('203.0.113.71')))).json()).toMatchObject({ accepted: true })
     })
   })
 

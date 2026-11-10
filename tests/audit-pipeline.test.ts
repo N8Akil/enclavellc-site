@@ -97,7 +97,8 @@ describe('runAuditJob', () => {
       const reply = {
         whereYouStand: 'A plain offer with little to act on.',
         working: [{ title: 'Plain words', line: 'You say what you do.', evidence }, { title: 'A clear heading', line: 'The heading names the service.', evidence }],
-        fixes: [1, 2, 3].map((n) => ({ headline: `Fix ${n}`, whatWeSaw: 'What the page says.', evidence, whyItMatters: 'It costs calls.', theFix: 'Change it.', effort: 'ten_minutes', selfServe: true })),
+        // (headlines in words: RULE 10 refuses a digit that is not in the evidence)
+        fixes: ['one', 'two', 'three'].map((n) => ({ headline: `Fix ${n}`, whatWeSaw: 'What the page says.', evidence, whyItMatters: 'It costs calls.', theFix: 'Change it.', effort: 'ten_minutes', selfServe: true })),
         areas: ['found', 'first_impression', 'next_step', 'trust'].map((key) => ({ key, score: 6, line: 'A line.', findings: [{ text: 'A finding.', evidence }] })),
       }
       const create = vi.fn(async (_params: { tools: unknown[]; messages: Array<{ content: unknown }> }) => ({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't', name: TOOL_NAME, input: reply }], _request_id: 'req_1' }))
@@ -127,8 +128,6 @@ describe('runAuditJob', () => {
       ['the model gives no usable audit', { audit: async () => ({ success: false as const, error: 'AUDIT_FAILED', message: 'x', websiteUrl: SITE }) }, 'model: StageFailure AUDIT_FAILED', ['fetch']],
       ['the model step throws', { audit: async () => Promise.reject(new RangeError(`bad ${LEAD.email}`)) }, 'model: RangeError', ['fetch']],
       ['the document cannot be made', { makeDocument: async () => Promise.reject(new TypeError(`cannot render ${SITE}`)) }, 'document: TypeError', ['fetch', 'model']],
-      ['the report mails throw', { sendReport: async () => Promise.reject(new Error(`mail to ${LEAD.email} failed`)) }, 'email: Error', ['fetch', 'model', 'document']],
-      ['the report does not reach the visitor', { sendReport: async () => ({ success: false, userSent: false, adminSent: true, error: 'user: 422 validation_error' }) }, 'email: StageFailure REPORT_NOT_SENT', ['fetch', 'model', 'document']],
       ['a stage throws something that is not an Error', { fetchSite: async () => Promise.reject('just a string') }, 'fetch: string', []],
     ])('%s', async (_, broken, code, ranBefore) => {
       const { calls, mocks, deps } = stages(broken)
@@ -139,6 +138,21 @@ describe('runAuditJob', () => {
       expect(loggedText(logs.error)).toContain(`[Audit] abcd1234 failed at ${code}`)
       expect(loggedText(logs.log)).not.toContain('completed')
       expectNoPii(logs, { includeLog: true })
+    })
+
+    // [RULE 8 / P3-11] once the report mail to the visitor was attempted, the visitor may have it: the failure goes to
+    // the admin only, never a failure mail to the visitor as well
+    it.each<[string, PipelineDeps, string]>([
+      ['the report mails throw', { sendReport: async () => Promise.reject(new Error(`mail to ${LEAD.email} failed`)) }, 'email: Error'],
+      ['the report does not reach the visitor', { sendReport: async () => ({ success: false, userSent: false, adminSent: false, error: 'user: 422 validation_error' }) }, 'email: StageFailure REPORT_NOT_SENT'],
+      ['the report send times out', { sendReport: async () => ({ success: false, userSent: false, adminSent: false, error: 'user: timeout' }) }, 'email: StageFailure REPORT_NOT_SENT'],
+    ])('%s: the admin is told, the visitor is not sent a failure mail', async (_, broken, code) => {
+      const { calls, mocks, deps } = stages(broken)
+      await expect(runAuditJob(job, deps)).resolves.toBe('failed')
+      expect(calls).toEqual(['fetch', 'model', 'document', 'failure mails'])
+      expect(mocks.sendFailure).toHaveBeenCalledTimes(1)
+      expect(mocks.sendFailure).toHaveBeenCalledWith(job, code, { visitor: false })
+      expect(loggedText(logs.error)).toContain(`[Audit] abcd1234 failed at ${code}`)
     })
 
     it('the report reaches the visitor but not the admin: that is a sent audit, with the admin failure logged as a code', async () => {

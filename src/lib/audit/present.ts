@@ -88,7 +88,8 @@ export function howMadeText(results: AuditResults): string {
     'and an AI model wrote the findings from that text. Each finding, fix and strength says what it rests on: your page\'s own words, ' +
     'something our software counted, or something our software looked for on the pages read and did not find, so you can check it yourself. ' +
     'Our software removed any finding whose quoted words it could not find on the page. ' +
-    'Text the page hides in its own markup is not read. ' +
+    "Text hidden in the page's own markup is not read; text hidden by a stylesheet or a script may be. " +
+    ((results.scriptPages ?? 0) > 0 ? 'Some pages build their content with scripts and were not read. ' : '') +
     (results.linksChecked > 0
       ? `Our software asked ${results.linksChecked} ${results.linksChecked === 1 ? 'link' : 'links'} on your own site whether ${results.linksChecked === 1 ? 'it answers' : 'they answer'}; links to other sites were not checked. `
       : 'Links were not checked. ') +

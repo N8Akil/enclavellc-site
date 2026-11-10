@@ -3,9 +3,9 @@
 // (comma-separated) get the automated report. Everyone else's request becomes a lead for a person to run by hand.
 // FAIL CLOSED: an unset or empty list means nobody gets the automated report.
 import { escapeHtml } from '@/lib/email/escape';
-import { getResendClient } from '@/lib/email/resend-client';
 import type { Niche } from './config';
 import { auditSetting } from './env';
+import { sendMail } from './mail';
 import { nicheWords } from './notify';
 
 export const PREVIEW_MESSAGE =
@@ -56,17 +56,10 @@ export async function sendPreviewLead(lead: {
 </body>
 </html>`.trim();
 
-  try {
-    const { data, error } = await getResendClient().emails.send({
-      from: 'Enclave Audit System <audits@enclavellc.net>',
-      to: lead.adminEmail,
-      subject: 'Audit request to run by hand',
-      html,
-    });
-    if (error) return { sent: false, error: `admin: ${error.statusCode ?? '-'} ${error.name}` };
-    if (!data?.id) return { sent: false, error: 'admin: no id' };
-    return { sent: true };
-  } catch (error) {
-    return { sent: false, error: `admin: threw ${error instanceof Error ? error.name : typeof error}` };
-  }
+  return sendMail('admin', {
+    from: 'Enclave Audit System <audits@enclavellc.net>',
+    to: lead.adminEmail,
+    subject: 'Audit request to run by hand',
+    html,
+  });
 }

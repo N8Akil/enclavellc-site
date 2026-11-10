@@ -31,15 +31,25 @@ export type UnsafeUrlCode =
   | 'HTTP_STATUS'
   | 'NETWORK'
   // a redirect pointed off the site the caller named (sameSiteOnly); it was not followed
-  | 'LEFT_SITE';
+  | 'LEFT_SITE'
+  // the audit's request budget for the site is spent (requestBudget); nothing was asked
+  | 'OVER_BUDGET';
 
 export class UnsafeUrlError extends Error {
   readonly code: UnsafeUrlCode;
-  constructor(code: UnsafeUrlCode) {
+  // HTTP_STATUS only: the status that answered, and whether it answered on a host other than the one first asked
+  // (a boolean, never the host itself: nothing in an error may say where the request was going)
+  readonly status?: number;
+  readonly hostChanged?: boolean;
+  constructor(code: UnsafeUrlCode, detail?: { status: number; hostChanged: boolean }) {
     // the code is the whole message, by design
     super(`audit fetch refused: ${code}`);
     this.name = 'UnsafeUrlError';
     this.code = code;
+    if (detail) {
+      this.status = detail.status;
+      this.hostChanged = detail.hostChanged;
+    }
   }
 }
 
@@ -260,6 +270,10 @@ export interface SafeFetchOptions {
   // resolved or connected, so the other host is never asked anything. It only narrows where a request may go; every
   // other rule is unchanged. Left out, redirects go wherever rules 1-3 allow, as before.
   sameSiteOnly?: (hostname: string) => boolean;
+  // A count shared by every request of one audit to the site: each hop of each request (page, file, probe, link
+  // check, redirect) takes one BEFORE it is resolved or connected. At zero the request ends with OVER_BUDGET and
+  // nothing is asked. Left out, there is no count.
+  requestBudget?: { remaining: number };
 }
 
 export interface SafePage {
@@ -375,6 +389,7 @@ async function guardedRequest(input: string, options: SafeFetchOptions, purpose:
   const maxRedirects = options.maxRedirects ?? FETCH_MAX_REDIRECTS;
 
   let current = checkUrl(input);
+  const firstHost = current.host;
 
   for (let hop = 0; ; hop++) {
     // one time limit per request: resolve + connect + headers + body
@@ -387,6 +402,11 @@ async function guardedRequest(input: string, options: SafeFetchOptions, purpose:
     let response: TransportResponse | undefined;
     try {
       if (controller.signal.aborted) throw new UnsafeUrlError('TIMEOUT');
+      // one request of the audit's budget, taken before the hop is resolved or connected
+      if (options.requestBudget) {
+        if (!(options.requestBudget.remaining > 0)) throw new UnsafeUrlError('OVER_BUDGET');
+        options.requestBudget.remaining -= 1;
+      }
       const { address, family } = await vetHop(current, resolver, controller.signal);
       response = await raceAbort(
         transport({
@@ -394,7 +414,8 @@ async function guardedRequest(input: string, options: SafeFetchOptions, purpose:
           hostname: bareHostname(current),
           address,
           family,
-          headers: { ...REQUEST_HEADERS },
+          // a page read asks for exactly the types it accepts (a sitemap read must not ask for HTML)
+          headers: purpose.kind === 'page' ? { ...REQUEST_HEADERS, Accept: purpose.types.join(',') } : { ...REQUEST_HEADERS },
           signal: controller.signal,
           method: purpose.kind === 'status' ? purpose.method : 'GET',
         }),
@@ -426,7 +447,9 @@ async function guardedRequest(input: string, options: SafeFetchOptions, purpose:
       // a link check wants the status and nothing else: the body is never read (the response is destroyed below)
       if (purpose.kind === 'status') return { finalUrl: current.href, status: response.status, body: '', leftHost: false };
 
-      if (response.status < 200 || response.status > 299) throw new UnsafeUrlError('HTTP_STATUS');
+      if (response.status < 200 || response.status > 299) {
+        throw new UnsafeUrlError('HTTP_STATUS', { status: response.status, hostChanged: current.host !== firstHost });
+      }
       const contentType = headerValue(response.headers, 'content-type').split(';')[0].trim().toLowerCase();
       if (!purpose.types.includes(contentType)) throw new UnsafeUrlError('BAD_CONTENT_TYPE');
 
@@ -463,14 +486,15 @@ export interface LinkStatus {
   leftHost: boolean;
 }
 
-// Asks one link on the audited site's own host for its status, through the guard. HEAD first, GET only when
-// the server says it does not do HEAD (405, 501); no body is ever read. A redirect that stays on the host is
+// Asks one link on the audited site's own host for its status, through the guard. HEAD first; GET when HEAD
+// answers with any error status (some servers refuse or mishandle HEAD: 403, 404, 405, 501 and others), so a link
+// is reported broken only when GET says so too. No body is ever read. A redirect that stays on the host is
 // followed (each hop vetted again); a redirect to any other host is reported and not followed.
 export async function safeCheckLink(input: string, sameHost: string, options: SafeFetchOptions = {}): Promise<LinkStatus> {
   // a link on another host is never requested at all
   if (checkUrl(input).host !== sameHost) throw new UnsafeUrlError('BLOCKED_ADDRESS');
   let result = await guardedRequest(input, options, { kind: 'status', method: 'HEAD', sameHost });
-  if (!result.leftHost && (result.status === 405 || result.status === 501)) {
+  if (!result.leftHost && result.status >= 400) {
     result = await guardedRequest(input, options, { kind: 'status', method: 'GET', sameHost });
   }
   return { status: result.status, leftHost: result.leftHost };

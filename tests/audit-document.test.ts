@@ -96,7 +96,11 @@ describe('the wording helpers', () => {
     const text = howMadeText(results)
     expect(text).toContain('3 public pages')
     expect(text).toContain('it reads at most eleven')
-    expect(text).toContain('Text the page hides in its own markup is not read.')
+    // [P2-2] the limit, stated as it is: markup-hidden text is not read, stylesheet- or script-hidden text may be
+    expect(text).toContain("Text hidden in the page's own markup is not read; text hidden by a stylesheet or a script may be.")
+    // [RULE 5] said only when it happened
+    expect(text).not.toContain('build their content with scripts')
+    expect(howMadeText({ ...results, scriptPages: 1 })).toContain('Some pages build their content with scripts and were not read.')
     expect(text).toContain('Our software asked 18 links on your own site whether they answer; links to other sites were not checked.')
     expect(text).toContain('Loading speed was not measured, so Speed has no score.')
     expect(text).toContain('Findings marked as seen in the phone screenshot rest on the AI model reading the picture; our software cannot check those.')
@@ -212,5 +216,35 @@ describe('generateAuditDocument', () => {
     expect(lines).not.toContain('Your Site on a Phone')
     expect(lines).toContain('Clear next step')
     expect(lines.join('\n')).not.toContain('Two clear doors')
+  })
+})
+
+describe('[P3-8, P3-14] the .docx: what XML cannot hold, the name cap, and the score colour', () => {
+  it('control characters in page quotes, model text and the name are removed, and the name is capped like the emails', async () => {
+    const bad = `Ring${String.fromCharCode(1)} us${String.fromCharCode(0x1b)} today, any day of the week`
+    const withControls: AuditResults = {
+      ...results,
+      whereYouStand: `Clear${String.fromCharCode(8)} offer.`,
+      working: [{ ...results.working[0], evidence: { kind: 'quote', pageUrl: `${SITE}/`, quote: bad } }, results.working[1]],
+    }
+    const xml = docxXml(await generateAuditDocument(withControls, { userName: `Zed${String.fromCharCode(2)}${'x'.repeat(300)}` }))
+    expect(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(xml)).toBe(false)
+    expect(xml).toContain('Ring us today, any day of the week')
+    // the first 100 characters (the control character among them), then cleaned
+    expect(xml).toContain(`Prepared for: Zed${'x'.repeat(96)}<`)
+    expect(xml).not.toContain('x'.repeat(97))
+  })
+
+  it.each([
+    [7.2, 'Good', '27AE60'],
+    [5.5, 'Needs Improvement', 'F39C12'],
+    [4.0, 'Critical', 'E74C3C'],
+  ] as const)('a %s (%s) score is coloured %s', async (overallScore, overallStatus, colour) => {
+    const xml = docxXml(await generateAuditDocument({ ...results, overallScore, overallStatus }))
+    const status = xml.indexOf(`>${overallStatus}<`)
+    expect(status).toBeGreaterThan(-1)
+    // the colour of the run that prints the status label under the score
+    const run = xml.slice(xml.lastIndexOf('<w:r>', status), status)
+    expect(run).toContain(`w:val="${colour}"`)
   })
 })

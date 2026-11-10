@@ -96,7 +96,13 @@ export async function runAuditJob(job: AuditJob, deps: PipelineDeps = {}): Promi
     const code = `${stage}: ${errorCode(error)}`;
     console.error(`${tag} failed at ${code}`);
     try {
-      const told = await (deps.sendFailure ?? sendFailureMails)(job, code);
+      // Once the report mail to the visitor has been attempted, the visitor may have it (a send can fail or time out
+      // after it was delivered), so they are sent nothing more: one audit never mails a visitor both a report and a
+      // failure. The admin is told, in words that say so.
+      const told =
+        stage === 'email'
+          ? await (deps.sendFailure ?? sendFailureMails)(job, code, { visitor: false })
+          : await (deps.sendFailure ?? sendFailureMails)(job, code);
       for (const problem of told.errors) console.error(`${tag} failure mail not sent: ${problem}`);
     } catch (mailError) {
       console.error(`${tag} failure mails threw: ${errorCode(mailError)}`);

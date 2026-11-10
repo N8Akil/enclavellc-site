@@ -33,7 +33,8 @@ describe('fact labels: written once, in code, and never a verdict', () => {
 
   it('there is a label for every fact in the three catalogues', () => {
     expect(labels).toHaveLength(Object.keys(ABSENT_FACTS).length + Object.keys(MEASURED_FACTS).length + Object.keys(SAYS_FACTS).length)
-    expect(labels.length).toBeGreaterThan(45)
+    // (the text-pattern absences left the catalogue under RULE 1: 42 labels now)
+    expect(labels.length).toBeGreaterThan(40)
     for (const label of labels) expect(label.trim().length).toBeGreaterThan(5)
   })
 
@@ -96,16 +97,13 @@ describe('computeFacts: a general site', () => {
       'no_og_title',
       'no_og_image',
       'no_local_business_data',
-      'no_phone_number',
-      'no_street_address',
       'no_tel_link',
       'no_mailto_link',
       'no_form',
-      'no_hours',
-      'no_service_area',
       'no_privacy_link',
-      'no_copyright_year',
     ])
+    // [RULE 1] no "not found" from a text pattern: phone, street, hours, the area served, the copyright year are
+    // never said to be missing (a pattern that did not match is no evidence)
     expect(facts.every((f) => f.family === 'absent')).toBe(true)
     expect(byId(facts, 'no_h1@1')).toEqual({ id: 'no_h1@1', area: 'found', family: 'absent', label: 'a main heading (H1) on /', hint: 'a main heading (H1) on page 1' })
     expect(factEvidence(byId(facts, 'no_form')!)).toEqual({ kind: 'absent', label: 'a form' })
@@ -244,7 +242,8 @@ describe('computeFacts: a general site', () => {
     const facts = computeFacts(content, 'general')
     expect(ids(facts).filter((id) => id.includes('@'))).toEqual(['no_title@2', 'no_meta_description@2', 'multiple_h1@2', 'noindex@2'])
     expect(byId(facts, 'multiple_h1@2')).toMatchObject({ family: 'measured', label: '/about?x=1 has 3 main headings (H1)', hint: 'page 2 has 3 main headings (H1)' })
-    expect(byId(facts, 'noindex@2')).toMatchObject({ family: 'says', pageUrl: `${SITE}/about?x=1`, quote: 'noindex, follow' })
+    // [P3-2] the page's own instruction exactly as written, not lower-cased by us
+    expect(byId(facts, 'noindex@2')).toMatchObject({ family: 'says', pageUrl: `${SITE}/about?x=1`, quote: 'NOINDEX, follow', markup: true })
   })
 
   it('a contact detail on ANY page read counts: no "missing" fact because the home page lacks it', () => {
@@ -277,20 +276,12 @@ describe('computeFacts: a general site', () => {
 describe('computeFacts: home care, the two doors and the words a careful family looks for', () => {
   const HOME_CARE_IDS = /career|word_|payer|request_care/
 
-  it('a site that says none of it: each is "not found on the pages read", and nothing more is claimed', () => {
+  // [RULE 1] the words a family looks for are positive-only: a page that does not use them gets NO fact about them.
+  // The one absence left is structural: no link, on any page, whose words or address name careers.
+  it('a site that says none of it: only the structural careers absence, and nothing is claimed about words', () => {
     const facts = computeFacts(site('<p>We help older adults stay at home in comfort.</p>'), 'home_care').filter((f) => HOME_CARE_IDS.test(f.id))
-    expect(ids(facts)).toEqual(['no_careers_link', 'no_request_care_form', 'no_word_licensed', 'no_word_insured', 'no_word_bonded', 'no_word_background_check', 'no_word_trained', 'no_payer_words'])
-    expect(facts.every((f) => f.family === 'absent')).toBe(true)
-    expect(facts.map((f) => evidenceLine(factEvidence(f)))).toEqual([
-      'Looked for on the pages read, not found: a careers or apply link',
-      'Looked for on the pages read, not found: a form to request care',
-      'Looked for on the pages read, not found: the words "licensed" or "registered"',
-      'Looked for on the pages read, not found: the word "insured"',
-      'Looked for on the pages read, not found: the word "bonded"',
-      'Looked for on the pages read, not found: the words "background check"',
-      'Looked for on the pages read, not found: the words "trained" or "training"',
-      'Looked for on the pages read, not found: how care is paid for (Medicaid, private pay, long-term care insurance or VA)',
-    ])
+    expect(ids(facts)).toEqual(['no_careers_link'])
+    expect(facts.map((f) => evidenceLine(factEvidence(f)))).toEqual(['Looked for on the pages read, not found: a careers or apply link'])
   })
 
   it('a site that says all of it: each is reported as what the page says, with the page\'s own sentence', () => {
@@ -305,7 +296,8 @@ describe('computeFacts: home care, the two doors and the words a careful family 
     expect(facts.every((f) => f.family === 'says')).toBe(true)
     expect(Object.fromEntries(facts.map((f) => [f.id, f.quote]))).toEqual({
       careers_link: 'Join our team',
-      request_care_form: 'Tell us who needs care Request care',
+      // [P3-2] one real piece of the form's words, not its labels stitched together
+      request_care_form: 'Request care',
       word_licensed: 'Sunrise is a licensed home care agency.',
       word_insured: 'Every caregiver is insured and bonded.',
       word_bonded: 'Every caregiver is insured and bonded.',
@@ -328,10 +320,9 @@ describe('computeFacts: home care, the two doors and the words a careful family 
 
   it('the words are matched as words: "unlicensed" is "licensed" to nobody, and a form about a newsletter is not a care form', () => {
     const facts = ids(computeFacts(site('<p>Beware of unlicensed and uninsured providers, retrained or not.</p><form><label>Newsletter</label><button>Subscribe</button></form>'), 'home_care'))
-    expect(facts).toContain('no_word_licensed')
-    expect(facts).toContain('no_word_insured')
-    expect(facts).toContain('no_word_trained')
-    expect(facts).toContain('no_request_care_form')
+    // positive-only: no match, no fact of either kind
+    for (const id of ['word_licensed', 'word_insured', 'word_trained', 'request_care_form']) expect(facts).not.toContain(id)
+    expect(facts.filter((id) => id.startsWith('no_word') || id === 'no_request_care_form')).toEqual([])
   })
 })
 
@@ -355,5 +346,185 @@ describe('how the facts reach the model', () => {
     expect(words.map((w) => w.id)).toEqual(facts.filter((f) => f.family === 'says').map((f) => f.id))
     expect(words.find((w) => w.id === 'tel_link')!.quote).toBe('Call SECRET-LINK-TEXT now')
     expect(words.find((w) => w.id === 'hours')!.quote).toContain('SECRET-PAGE-WORDS')
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------
+// The review's rulings
+// ---------------------------------------------------------------------------------------------------------------
+
+describe('[RULE 1] "not found" comes only from structural checks; text patterns are positive-only', () => {
+  // THE ALLOW-LIST. Every fact that can print under "Looked for on the pages read, not found:" is one of these, each
+  // a check of the markup or of an answer a request got. Adding an absence anywhere else turns this red.
+  const STRUCTURAL_ABSENCES = [
+    'no_title', // no <title>
+    'no_meta_description', // no <meta name="description">
+    'no_h1', // no <h1>
+    'no_sitemap', // /sitemap.xml answered 404 or 410 on the audited host
+    'no_og_title', // no og:title tag
+    'no_og_image', // no og:image tag
+    'no_local_business_data', // no LocalBusiness type in JSON-LD, microdata or RDFa
+    'no_tel_link', // no tel: link
+    'no_mailto_link', // no mailto: link
+    'no_form', // no <form> (and no frame that could hold one)
+    'no_https_answer', // an https:// request to the same host failed with a connection or TLS error
+    'no_https_redirect', // http:// answered without sending the visitor to https://
+    'no_privacy_link', // no link whose address or words name a privacy policy
+    'no_careers_link', // home care: no link, on any page, any host, whose address or words name careers
+    'no_careers_link_first', // home care: none among the home page's first links
+  ]
+
+  it('the absence catalogue is exactly the allow-list of structural ids', () => {
+    expect(Object.keys(ABSENT_FACTS).sort()).toEqual([...STRUCTURAL_ABSENCES].sort())
+  })
+
+  it('and only absence facts print under the "not found" lead-in: no other family can', () => {
+    const many = computeFacts(site('<p>We serve Austin.</p>', '', { ...PROBES, sitemap: { state: 'missing' }, httpsRedirect: 'no_redirect', https: 'no_answer' }), 'home_care')
+    for (const fact of many) {
+      const printed = evidenceLine(factEvidence(fact))
+      if (printed.startsWith(LEAD_IN_ABSENT)) {
+        expect(fact.family).toBe('absent')
+        expect(STRUCTURAL_ABSENCES).toContain(fact.id.replace(/@\d+$/, ''))
+      }
+    }
+  })
+
+  it.each([
+    ['Service Areas', '<h2>Service Areas</h2><p>Travis and Hays counties.</p>'],
+    ['Areas We Serve', '<h2>Areas We Serve</h2>'],
+    ['Proudly Serving Austin', '<p>Proudly Serving Austin since 2001.</p>'],
+    ['We serve Austin', '<p>We serve Austin and Round Rock.</p>'],
+    ['Communities We Serve', '<h3>Communities We Serve</h3>'],
+    ['Service area: Travis County', '<p>Service area: Travis County</p>'],
+  ])('the area served, written as "%s", is found and quoted', (words, body) => {
+    const facts = computeFacts(site(body), 'general')
+    expect(byId(facts, 'service_area')?.quote, words).toContain(words.split(' ')[0])
+    expect(ids(facts)).not.toContain('no_service_area')
+  })
+
+  it.each([
+    ['1-800-FLOWERS', '<p>Call 1-800-FLOWERS today.</p>'],
+    ['+44 20 7946 0958', '<p>London office: +44 20 7946 0958.</p>'],
+    ['5125550100', '<p>Text us at 5125550100.</p>'],
+    ['512/555-0100', '<p>Phone 512/555-0100.</p>'],
+    ['(512) 555-0100', '<p>Phone (512) 555-0100.</p>'],
+  ])('a phone number written as %s is found and quoted', (number, body) => {
+    expect(byId(computeFacts(site(body), 'general'), 'phone_number')?.quote).toContain(number)
+  })
+
+  it('a page with none of the text patterns gets no fact about any of them, of either kind', () => {
+    const facts = ids(computeFacts(site('<p>Hello and welcome.</p>'), 'home_care'))
+    for (const id of ['phone_number', 'street_address', 'hours', 'service_area', 'copyright_year', 'business_name', 'request_care_form', 'payer_words']) {
+      expect(facts).not.toContain(id)
+      expect(facts).not.toContain(`no_${id}`)
+    }
+  })
+
+  it('the business name matches across a curly and a straight apostrophe, and quotes the page\'s own spelling', () => {
+    const facts = computeFacts(site('<p>Welcome to Bob’s Plumbing of Austin.</p>', `<title>T</title><meta property="og:site_name" content="Bob's Plumbing">`), 'general')
+    expect(byId(facts, 'business_name')?.quote).toBe('Bob’s Plumbing')
+  })
+
+  it('local-business details written as microdata or RDFa count, so they are not "not found"', () => {
+    const micro = site('<div itemscope itemtype="https://schema.org/Plumber"><span itemprop="name">Bob Plumbing</span></div>')
+    const rdfa = site('<div vocab="https://schema.org/" typeof="LocalBusiness"><span property="name">Bob</span></div>')
+    expect(ids(computeFacts(micro, 'general'))).not.toContain('no_local_business_data')
+    expect(micro.pages[0].facts.schemaName).toBe('Bob Plumbing')
+    expect(ids(computeFacts(rdfa, 'general'))).not.toContain('no_local_business_data')
+  })
+})
+
+describe('[RULE 2] nothing about https that was not asked', () => {
+  it('"not found: an answer on https://" ONLY when the https request failed with a connection or TLS error', () => {
+    const http = (https: SiteProbes['https']): WebsiteContent => ({ pages: [page('<p>Hi</p>', '<title>T</title>', 'http://care.example.test/')], probes: { ...PROBES, https, httpsRedirect: 'unknown' } })
+    expect(byId(computeFacts(http('no_answer'), 'general'), 'no_https_answer')).toMatchObject({
+      family: 'absent',
+      area: 'trust',
+      label: 'an answer from your site on https:// (a secure address) when we tried it',
+    })
+    for (const state of ['yes', 'unknown', undefined] as const) expect(ids(computeFacts(http(state), 'general'))).not.toContain('no_https_answer')
+    // a home page read over http:// is not, by itself, evidence of anything
+    expect(ids(computeFacts({ pages: [page('<p>Hi</p>', '<title>T</title>', 'http://care.example.test/')] }, 'general')).filter((id) => /https/.test(id))).toEqual([])
+  })
+})
+
+describe('[RULE 3] robots.txt: the file\'s own line, or a plain statement', () => {
+  it('a line short enough is quoted as the file wrote it; a longer one is stated without quotation marks', () => {
+    const quoted = computeFacts(site('<p>Hi</p>', undefined, { ...PROBES, robots: { state: 'found', disallowsHome: true, rule: 'disallow:/   # all of it' } }), 'general')
+    expect(evidenceLine(factEvidence(byId(quoted, 'robots_disallows_home')!))).toBe('Your page says: “disallow:/   # all of it” (on /robots.txt)')
+    const long = `Disallow: / # ${'x'.repeat(200)}`
+    const stated = computeFacts(site('<p>Hi</p>', undefined, { ...PROBES, robots: { state: 'found', disallowsHome: true, rule: long } }), 'general')
+    expect(ids(stated)).not.toContain('robots_disallows_home')
+    expect(evidenceLine(factEvidence(byId(stated, 'robots_blocks_home')!))).toBe('Counted on your pages: your robots.txt file has a line telling every search engine to stay off your whole site')
+  })
+})
+
+describe('[RULE 4] nothing hidden is quotable, through a fact or otherwise', () => {
+  it('a hidden tel: link counts as a link (no "not found"), and its hidden words are quoted nowhere', () => {
+    const hidden = page('<p>Welcome to the agency home page.</p><a href="tel:5551234" style="display:none">Licensed and bonded since 1990</a>')
+    expect(hidden.facts.hasPhoneLink).toBe(true)
+    expect(hidden.facts.phoneLink).toBeNull()
+    const facts = computeFacts({ pages: [hidden] }, 'home_care')
+    expect(ids(facts)).not.toContain('no_tel_link')
+    expect(ids(facts)).not.toContain('tel_link')
+    expect(JSON.stringify(facts)).not.toContain('Licensed and bonded')
+    expect(JSON.stringify(hidden.facts)).not.toContain('Licensed and bonded')
+  })
+})
+
+describe('[RULE 5] a page built by scripts: no fact from its text', () => {
+  const app = (extra = '') =>
+    page(`<div id="root"></div><script src="/app.js"></script><script>render()</script>${extra}`, '<title>Sunrise Home Care</title><meta property="og:title" content="Sunrise">')
+
+  it('little visible text and scripts: the page is unreadable; head-level facts still made, body absences not', () => {
+    const spa = app('<p>Loading</p>')
+    expect(spa.textUnreadable).toBe(true)
+    const facts = ids(computeFacts({ pages: [spa] }, 'home_care'))
+    expect(facts).toContain('no_meta_description@1')
+    expect(facts).toContain('no_og_image')
+    expect(facts).toContain('title_length')
+    for (const id of ['no_h1@1', 'no_form', 'no_tel_link', 'no_mailto_link', 'no_privacy_link', 'no_careers_link']) expect(facts).not.toContain(id)
+    for (const id of ['phone_number', 'hours', 'service_area', 'business_name']) expect(facts).not.toContain(id)
+  })
+
+  it('a text-based fact is not made from it even when its little text matches', () => {
+    const spa = app('<p>Call 512-555-0100. We serve Austin.</p>')
+    expect(spa.textUnreadable).toBe(true)
+    const facts = ids(computeFacts({ pages: [spa] }, 'general'))
+    expect(facts).not.toContain('phone_number')
+    expect(facts).not.toContain('service_area')
+  })
+
+  it('the same little text with no scripts is an ordinary page', () => {
+    const plain = page('<p>Call 512-555-0100. We serve Austin.</p>')
+    expect(plain.textUnreadable).toBe(false)
+    expect(ids(computeFacts({ pages: [plain] }, 'general'))).toEqual(expect.arrayContaining(['phone_number', 'service_area', 'no_h1@1']))
+  })
+
+  it('a page that embeds a frame (a form may be inside it) is never "no form"', () => {
+    const framed = page(`<p>${'Plenty of readable text about the agency. '.repeat(8)}</p><iframe src="https://forms.example.test/x"></iframe>`)
+    expect(framed.textUnreadable).toBe(false)
+    expect(ids(computeFacts({ pages: [framed] }, 'general'))).not.toContain('no_form')
+    expect(ids(computeFacts({ pages: [page(`<p>${'Plenty of readable text. '.repeat(10)}</p>`)] }, 'general'))).toContain('no_form')
+  })
+})
+
+describe('[RULE 6] home care: careers links on another site, and care forms that are not job forms', () => {
+  it('a careers link to an applicant portal on another site is a positive fact, never "missing"', () => {
+    const filler = Array.from({ length: 20 }, (_, i) => `<a href="/p${i}">Page ${i}</a>`).join('')
+    const facts = computeFacts(site(`${filler}<footer><a href="https://jobs.portal.example.org/sunrise">Apply now</a></footer>`), 'home_care')
+    expect(byId(facts, 'careers_link_elsewhere')).toMatchObject({ family: 'says', quote: 'Apply now' })
+    expect(evidenceLine(factEvidence(byId(facts, 'careers_link_elsewhere')!))).toBe('Your page says: “Apply now” (on /)')
+    expect(ids(facts)).not.toContain('no_careers_link')
+  })
+
+  it('a caregiver job form is not a form to request care', () => {
+    const facts = ids(computeFacts(site('<form><label>Caregiver application</label><label>Upload resume</label><button>Submit</button></form><form><button>Apply</button></form>'), 'home_care'))
+    expect(facts).not.toContain('request_care_form')
+  })
+
+  it.each(['Request care', 'Schedule a free assessment', 'Request a consultation', 'Free in-home assessment'])('"%s" on a form is one', (words) => {
+    const facts = computeFacts(site(`<form><label>Your name</label><button>${words}</button></form>`), 'home_care')
+    expect(byId(facts, 'request_care_form')?.quote).toBe(words)
   })
 })

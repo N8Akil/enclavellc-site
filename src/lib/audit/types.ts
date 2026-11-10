@@ -32,23 +32,33 @@ export interface PageFacts {
   hasSocialLinks: boolean;
   hasPrivacyLink: boolean;
   formCount: number;
+  // the page embeds a frame (a form may live in it, unread)
+  hasIframe: boolean;
+  // the page carries scripts that can build its content (structured-data blocks are not counted)
+  hasScripts: boolean;
   // the content of <meta name="robots">, lower-cased ('' when there is none)
   robotsMeta: string;
+  // the same, exactly as the page wrote it (trimmed): what is quoted
+  robotsMetaRaw: string;
   ogTitle: string;
   ogImage: string;
   ogSiteName: string;
   // a LocalBusiness-type block in the page's structured data (JSON-LD), and the name it gives
   hasLocalBusinessSchema: boolean;
   schemaName: string;
-  // the first tel: and mailto: links, as the page shows them
+  // the first VISIBLE tel: and mailto: links, with their visible words
   phoneLink: PageLink | null;
   emailLink: PageLink | null;
-  // the first links of the page in document order: what a visitor meets before scrolling far
+  // the first visible links of the page in document order: what a visitor meets before scrolling far
   firstLinks: PageLink[];
-  // every link to the site's own host found on the page (absolute, no fragment), with its visible words
+  // every visible link to the site's own host found on the page (absolute, no fragment), with its visible words
   ownLinks: PageLink[];
-  // each form's visible words (labels, buttons)
+  // every link of the page, any host, hidden ones included (a hidden link's words are not kept: text '')
+  links: Array<PageLink & { hidden: boolean }>;
+  // each visible form's visible words (labels, buttons), joined
   forms: string[];
+  // the same, piece by piece: each piece is one element's own words
+  formParts: string[][];
 }
 
 export interface FetchedPage {
@@ -62,6 +72,8 @@ export interface FetchedPage {
   // the page's OWN words inside `text` (no label, separator or marker of ours), each with where it starts.
   // Quotes are checked against these and nothing else.
   segments: PageSegment[];
+  // the page builds its content with scripts (little visible text, scripts present): no fact is made from its text
+  textUnreadable?: boolean;
 }
 
 export interface PageSegment {
@@ -79,6 +91,9 @@ export interface SiteProbes {
   sitemap: { state: 'found'; locCount: number } | { state: 'missing' } | { state: 'unknown' };
   // does the http:// address of the site end up on https://
   httpsRedirect: 'redirects' | 'no_redirect' | 'unknown';
+  // does the site answer on https:// at all ('yes' for a site read over https). 'no_answer' ONLY when an https://
+  // request to the same host failed with a connection or TLS error; anything else that went wrong is 'unknown'
+  https?: 'yes' | 'no_answer' | 'unknown';
   // links on the site's OWN host only; other hosts are never asked
   links: { checked: number; broken: Array<{ url: string; status: number }> };
 }
@@ -185,6 +200,8 @@ export interface AuditResults {
   linksChecked: number;
   // findings, fixes and strengths removed because their evidence did not check out
   droppedFindings: number;
+  // pages read that build their content with scripts, whose text was therefore not read (left out: none)
+  scriptPages?: number;
 }
 
 export interface AuditError {

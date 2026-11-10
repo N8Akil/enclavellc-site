@@ -64,9 +64,12 @@ describe('sendAuditEmails', () => {
     expect(await sendAuditEmails(options())).toMatchObject({ success: false, userSent: true, adminSent: false })
   })
 
-  it('[fold 1] reports which send went out: visitor no, admin yes', async () => {
+  // [P3-11] the admin's copy says the report went out, so it is sent only once the visitor's report is confirmed;
+  // otherwise the pipeline writes to the admin once, saying it was not confirmed
+  it('[fold 1] reports which send went out: visitor no, so no admin copy either', async () => {
     send.mockResolvedValueOnce(resendErr()).mockResolvedValueOnce(resendOk())
-    expect(await sendAuditEmails(options())).toMatchObject({ success: false, userSent: false, adminSent: true })
+    expect(await sendAuditEmails(options())).toMatchObject({ success: false, userSent: false, adminSent: false })
+    expect(send).toHaveBeenCalledTimes(1)
   })
 
   // fold 2: everything user-supplied (or derived from the visitor's site) is escaped in both emails
@@ -197,5 +200,73 @@ describe('sendAuditEmails', () => {
   it('fails when a send throws, without logging what it threw', async () => {
     send.mockRejectedValue(new Error(`connect ECONNRESET while sending to ${LEAD.email} for ${SITE}`))
     expectFailureWithoutPii(await sendAuditEmails(options()))
+  })
+})
+
+describe('[RULE 8] every mail has a time limit: a hung send is a failed send with a code', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it(`a report send that never answers fails after ${20} seconds with "timeout", and no admin copy goes out`, async () => {
+    vi.useFakeTimers()
+    send.mockReturnValueOnce(new Promise(() => {})).mockResolvedValue(resendOk())
+    const pending = sendAuditEmails(options())
+    await vi.advanceTimersByTimeAsync(19_999)
+    let settled = false
+    void pending.then(() => (settled = true))
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await pending).toEqual({ success: false, userSent: false, adminSent: false, error: 'user: timeout' })
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('the accept, failure and lead mails have the same limit', async () => {
+    const { sendAcceptMail, sendFailureMails, MAIL_TIMEOUT_MS } = { ...(await import('@/lib/audit/notify')), ...(await import('@/lib/audit/mail')) }
+    const { sendPreviewLead } = await import('@/lib/audit/preview')
+    expect(MAIL_TIMEOUT_MS).toBe(20_000)
+    vi.useFakeTimers()
+    send.mockReturnValue(new Promise(() => {}))
+    const lead = { userEmail: LEAD.email, userName: LEAD.name, websiteUrl: SITE, niche: 'general' as const, adminEmail: 'n.garrett@enclavellc.net' }
+    const accept = sendAcceptMail(lead)
+    const preview = sendPreviewLead(lead)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await accept).toEqual({ sent: false, error: 'admin: timeout' })
+    expect(await preview).toEqual({ sent: false, error: 'admin: timeout' })
+    const failure = sendFailureMails(lead, 'fetch: x')
+    await vi.advanceTimersByTimeAsync(40_000)
+    expect(await failure).toEqual({ userSent: false, adminSent: false, errors: ['user: timeout', 'admin: timeout'] })
+  })
+
+  it('a send that rejects after its time limit does not become an unhandled rejection', async () => {
+    vi.useFakeTimers()
+    let reject: (e: Error) => void = () => {}
+    send.mockReturnValueOnce(new Promise((_, r) => (reject = r)))
+    const { sendMail } = await import('@/lib/audit/mail')
+    const pending = sendMail('user', { from: 'a@b.test', to: 'c@d.test', subject: 's', html: 'h' })
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(await pending).toEqual({ sent: false, error: 'user: timeout' })
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    reject(new Error('late'))
+    vi.useRealTimers()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    process.off('unhandledRejection', unhandled)
+    expect(unhandled).not.toHaveBeenCalled()
+  })
+})
+
+describe('[P3-14] the score colour follows the status label', () => {
+  it.each([
+    [7.5, 'Good', '#27AE60'],
+    [9.1, 'Excellent', '#27AE60'],
+    [5.5, 'Needs Improvement', '#F39C12'],
+    [6.9, 'Needs Improvement', '#F39C12'],
+    [4.9, 'Critical', '#C0392B'],
+  ] as const)('%s (%s) is %s', async (overallScore, overallStatus, colour) => {
+    send.mockResolvedValue(resendOk())
+    await sendAuditEmails({ ...options(), websiteUrl: REPORT_SITE, auditResults: { ...reportFixture, overallScore, overallStatus } })
+    // the visitor's score badge, and the score in the admin's copy
+    expect(send.mock.calls[0][0].html).toContain(`background-color: ${colour}; color: white; font-size: 48px`)
+    expect(send.mock.calls[1][0].html).toContain(`<span style="color: ${colour}; font-weight: bold; font-size: 18px;">`)
   })
 })
