@@ -1,244 +1,248 @@
 // src/lib/audit/fetch-website.ts
-// Service to fetch and extract content from target websites
-// Enhanced to discover and analyze ALL connected pages
+// Reads the target site's homepage and up to MAX_LINKED_PAGES same-host pages it links to.
+// Every request goes through safe-fetch.ts; nothing here opens a connection itself.
 
 import * as cheerio from 'cheerio';
-import type { WebsiteContent } from './types';
+import {
+  AUDIT_FETCH_DEADLINE_MS,
+  MAX_LINKED_PAGES,
+  PAGE_TEXT_CAP,
+  TOTAL_TEXT_CAP,
+  TRUNCATION_MARKER,
+} from './config';
+import { checkUrl, safeFetchPage, UnsafeUrlError, type SafeFetchOptions } from './safe-fetch';
+import type { FetchedPage, PageFacts, WebsiteContent } from './types';
 
-interface DiscoveredPage {
-  url: string;
-  title: string;
-  content: string;
+export interface FetchWebsiteOptions extends Pick<SafeFetchOptions, 'resolver' | 'transport' | 'timeoutMs' | 'maxBytes'> {
+  // whole-audit time limit across all page requests
+  deadlineMs?: number;
+  concurrency?: number;
 }
 
-interface EnhancedWebsiteContent extends WebsiteContent {
-  discoveredPages: DiscoveredPage[];
-  totalPagesAnalyzed: number;
-  siteStructure: string[];
-}
-
-export async function fetchWebsiteContent(url: string): Promise<EnhancedWebsiteContent> {
-  const normalizedUrl = normalizeUrl(url);
-  const baseHost = new URL(normalizedUrl).host;
+export async function fetchWebsiteContent(url: string, options: FetchWebsiteOptions = {}): Promise<WebsiteContent> {
+  const { deadlineMs = AUDIT_FETCH_DEADLINE_MS, concurrency = 3, ...fetchOptions } = options;
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), deadlineMs);
+  const guarded = { ...fetchOptions, signal: deadline.signal };
 
   try {
-    // Step 1: Fetch homepage and discover all internal links
-    const homepageHtml = await fetchPageRaw(normalizedUrl);
-    const homepage = extractTextContent(homepageHtml);
+    // the homepage must load; a failure here fails the audit with the guard's typed error
+    const home = await safeFetchPage(normalizeUrl(url), guarded);
+    const homepage = extractPage(home.html, home.finalUrl);
+    // links are followed on the host that actually answered (a site that redirects to www keeps its pages)
+    const baseHost = new URL(home.finalUrl).host;
+    const links = discoverInternalLinks(home.html, home.finalUrl, baseHost).slice(0, MAX_LINKED_PAGES);
 
-    // Step 2: Discover all internal links from homepage
-    const discoveredLinks = discoverInternalLinks(homepageHtml, normalizedUrl, baseHost);
-
-    // Step 3: Fetch all discovered pages (limit to 10 for performance)
-    const pagesToFetch = discoveredLinks.slice(0, 10);
-    const discoveredPages: DiscoveredPage[] = [];
-
-    // Fetch pages in parallel with timeout
-    const pagePromises = pagesToFetch.map(async (link) => {
-      try {
-        const html = await fetchPageRaw(link.url);
-        const content = extractTextContent(html);
-        const $ = cheerio.load(html);
-        const title = $('title').text() || link.label || 'Untitled';
-
-        return {
-          url: link.url,
-          title: title.trim(),
-          content
-        };
-      } catch {
-        // Skip pages that fail to load
-        return null;
+    // a few at a time, in order; a linked page that fails or is refused is skipped
+    const linked: Array<FetchedPage | null> = new Array(links.length).fill(null);
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < links.length && !deadline.signal.aborted) {
+        const index = cursor++;
+        try {
+          const page = await safeFetchPage(links[index], guarded);
+          // a redirect off the site's host is not part of this site
+          if (new URL(page.finalUrl).host !== baseHost) continue;
+          linked[index] = extractPage(page.html, page.finalUrl);
+        } catch {
+          // skipped
+        }
       }
-    });
-
-    const results = await Promise.allSettled(pagePromises);
-    for (const result of results) {
-      if (result.status === 'fulfilled' && result.value) {
-        discoveredPages.push(result.value);
-      }
-    }
-
-    // Categorize pages for backwards compatibility
-    const about = discoveredPages.find(p =>
-      p.url.toLowerCase().includes('about') ||
-      p.title.toLowerCase().includes('about')
-    )?.content;
-
-    const contact = discoveredPages.find(p =>
-      p.url.toLowerCase().includes('contact') ||
-      p.title.toLowerCase().includes('contact')
-    )?.content;
-
-    const services = discoveredPages.find(p =>
-      p.url.toLowerCase().includes('service') ||
-      p.title.toLowerCase().includes('service')
-    )?.content;
-
-    return {
-      homepage,
-      about,
-      contact,
-      services,
-      discoveredPages,
-      totalPagesAnalyzed: discoveredPages.length + 1, // +1 for homepage
-      siteStructure: [normalizedUrl, ...discoveredPages.map(p => p.url)]
     };
-  } catch (error) {
-    throw new Error(`Failed to fetch website content: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, links.length)) }, worker));
+
+    const seen = new Set<string>([homepage.url]);
+    const pages: FetchedPage[] = [homepage];
+    for (const page of linked) {
+      if (!page || seen.has(page.url)) continue;
+      seen.add(page.url);
+      pages.push(page);
+    }
+    return { pages: capTotal(pages) };
+  } finally {
+    clearTimeout(timer);
+    deadline.abort();
   }
 }
 
-interface InternalLink {
-  url: string;
-  label: string;
+// Keeps the total text sent to the model under TOTAL_TEXT_CAP. Later pages are cut first, visibly.
+function capTotal(pages: FetchedPage[]): FetchedPage[] {
+  const kept: FetchedPage[] = [];
+  let used = 0;
+  for (const page of pages) {
+    const room = TOTAL_TEXT_CAP - used;
+    if (room <= TRUNCATION_MARKER.length + 200) break;
+    if (page.text.length <= room) {
+      kept.push(page);
+      used += page.text.length;
+    } else {
+      const text = cutText(page.text, room);
+      kept.push({ ...page, text, truncated: true });
+      used += text.length;
+    }
+  }
+  return kept;
 }
 
-function discoverInternalLinks(html: string, baseUrl: string, baseHost: string): InternalLink[] {
-  const $ = cheerio.load(html);
-  const links: InternalLink[] = [];
-  const seenUrls = new Set<string>();
+function cutText(text: string, cap: number): string {
+  if (text.length <= cap) return text;
+  return `${text.slice(0, Math.max(0, cap - TRUNCATION_MARKER.length - 1))} ${TRUNCATION_MARKER}`;
+}
 
-  // Add the base URL to prevent re-fetching homepage
-  seenUrls.add(normalizeUrl(baseUrl));
+function discoverInternalLinks(html: string, baseUrl: string, baseHost: string): string[] {
+  const $ = cheerio.load(html);
+  const links: string[] = [];
+  const seenUrls = new Set<string>([normalizeUrl(baseUrl)]);
 
   $('a[href]').each((_, element) => {
-    const href = $(element).attr('href');
-    const label = $(element).text().trim();
-
-    if (!href) return;
+    const href = ($(element).attr('href') || '').trim();
+    if (!href || href.startsWith('#')) return;
+    if (/\.(pdf|doc|docx|xls|xlsx|zip|png|jpg|jpeg|gif|svg|webp|mp4|mp3)$/i.test(href.split(/[?#]/)[0])) return;
 
     try {
-      // Resolve relative URLs
-      const absoluteUrl = new URL(href, baseUrl).href;
-      const urlObj = new URL(absoluteUrl);
-
-      // Only include internal links (same host)
+      // rule 1 here too, so mailto:, tel:, javascript:, odd ports and credentials never become a request
+      const urlObj = checkUrl(new URL(href, baseUrl));
+      // only the same host as the page that answered
       if (urlObj.host !== baseHost) return;
-
-      // Skip anchors, javascript, mailto, tel, file downloads
-      if (
-        href.startsWith('#') ||
-        href.startsWith('javascript:') ||
-        href.startsWith('mailto:') ||
-        href.startsWith('tel:') ||
-        href.match(/\.(pdf|doc|docx|xls|xlsx|zip|png|jpg|jpeg|gif|svg|mp4|mp3)$/i)
-      ) {
-        return;
-      }
-
-      // Normalize and dedupe
       const normalizedUrl = `${urlObj.protocol}//${urlObj.host}${urlObj.pathname}`.replace(/\/$/, '');
-
       if (!seenUrls.has(normalizedUrl)) {
         seenUrls.add(normalizedUrl);
-        links.push({
-          url: normalizedUrl,
-          label: label || urlObj.pathname
-        });
+        links.push(normalizedUrl);
       }
     } catch {
-      // Invalid URL, skip
+      // not a URL the audit may request: skip
     }
   });
 
-  // Sort by likely importance (shorter paths first, then alphabetically)
+  // shorter paths first, then alphabetically
   return links.sort((a, b) => {
-    const aDepth = (a.url.match(/\//g) || []).length;
-    const bDepth = (b.url.match(/\//g) || []).length;
+    const aDepth = (a.match(/\//g) || []).length;
+    const bDepth = (b.match(/\//g) || []).length;
     if (aDepth !== bDepth) return aDepth - bDepth;
-    return a.url.localeCompare(b.url);
+    return a.localeCompare(b);
   });
 }
 
-async function fetchPageRaw(url: string): Promise<string> {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'EnclaveLLC-AuditBot/1.0 (Website Audit Service)',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    },
-    signal: AbortSignal.timeout(15000), // 15 second timeout
-  });
+const squash = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  }
-
-  return await response.text();
-}
-
-function extractTextContent(html: string): string {
+// Turns one page's HTML into the facts the code can state and the labelled text the model reads.
+// Facts are read from the FULL document. Header, navigation and footer text are kept, labelled.
+export function extractPage(html: string, url: string): FetchedPage {
   const $ = cheerio.load(html);
 
-  // Remove scripts, styles, and nav elements
-  $('script, style, nav, footer, iframe, noscript, header').remove();
+  const title = squash($('title').first().text());
+  const metaDescription = squash($('meta[name="description" i]').attr('content') || '');
+  const images = $('img');
+  const facts: PageFacts = {
+    isHttps: url.startsWith('https://'),
+    title,
+    metaDescription,
+    h1Count: $('h1').length,
+    imageCount: images.length,
+    imagesWithoutAlt: images.filter((_, el) => $(el).attr('alt') === undefined).length,
+    hasCanonical: $('link[rel="canonical" i][href]').length > 0,
+    hasViewportMeta: $('meta[name="viewport" i]').length > 0,
+    hasPhoneLink: $('a[href^="tel:" i]').length > 0,
+    hasEmailLink: $('a[href^="mailto:" i]').length > 0,
+    hasSocialLinks:
+      $(
+        'a[href*="facebook.com" i], a[href*="twitter.com" i], a[href*="//x.com" i], a[href*="linkedin.com" i], a[href*="instagram.com" i], a[href*="youtube.com" i], a[href*="tiktok.com" i]'
+      ).length > 0,
+    hasPrivacyLink:
+      $('a[href]').filter((_, el) => /privacy/i.test($(el).attr('href') || '') || /privacy/i.test($(el).text())).length > 0,
+    formCount: $('form').length,
+  };
 
-  // Extract meaningful content
-  const title = $('title').text();
-  const metaDescription = $('meta[name="description"]').attr('content') || '';
-  const metaKeywords = $('meta[name="keywords"]').attr('content') || '';
-  const h1 = $('h1').map((_, el) => $(el).text().trim()).get().join(' | ');
-  const h2 = $('h2').map((_, el) => $(el).text().trim()).get().join(' | ');
-  const h3 = $('h3').map((_, el) => $(el).text().trim()).get().join(' | ');
-  const paragraphs = $('p').map((_, el) => $(el).text().trim()).get().filter(Boolean).join(' ');
-  const lists = $('li').map((_, el) => $(el).text().trim()).get().filter(Boolean).join(' ');
-  const images = $('img').map((_, el) => $(el).attr('alt') || '').get().filter(Boolean).join(' ');
+  const altText = squash(
+    images
+      .map((_, el) => $(el).attr('alt') || '')
+      .get()
+      .filter(Boolean)
+      .join(' | ')
+  );
 
-  // Check for common elements
-  const hasContactForm = $('form').length > 0;
-  const hasPhone = $('a[href^="tel:"]').length > 0;
-  const hasEmail = $('a[href^="mailto:"]').length > 0;
-  const hasSocialLinks = $('a[href*="facebook"], a[href*="twitter"], a[href*="linkedin"], a[href*="instagram"]').length > 0;
+  // not content: removed before any text is read
+  $('script, style, iframe, noscript, template').remove();
+  // keep words apart that sit in separate blocks
+  $('p, div, li, br, h1, h2, h3, h4, h5, h6, td, th, tr, section, article, header, footer, nav, main, aside, a, button, label, option, dt, dd, blockquote, figcaption, summary').each(
+    (_, el) => {
+      $(el).before(' ').after(' ');
+    }
+  );
 
-  // Combine content with clear sections
-  return `
-Title: ${title}
-Meta Description: ${metaDescription}
-Meta Keywords: ${metaKeywords}
-Main Heading (H1): ${h1}
-Section Headings (H2): ${h2}
-Subsection Headings (H3): ${h3}
-Content: ${paragraphs}
-List Items: ${lists}
-Image Alt Text: ${images}
-Has Contact Form: ${hasContactForm ? 'Yes' : 'No'}
-Has Phone Number: ${hasPhone ? 'Yes' : 'No'}
-Has Email Link: ${hasEmail ? 'Yes' : 'No'}
-Has Social Links: ${hasSocialLinks ? 'Yes' : 'No'}
-  `.trim();
+  const list = (selector: string) =>
+    squash(
+      $(selector)
+        .map((_, el) => squash($(el).text()))
+        .get()
+        .filter(Boolean)
+        .join(' | ')
+    );
+  const h1 = list('h1');
+  const h2 = list('h2');
+  const h3 = list('h3');
+
+  // navigation and footer are read on their own, then taken out so the body text is the page's own content
+  const navigation = squash($('header, nav').not('header nav, footer nav').text());
+  const footer = squash($('footer').text());
+  $('header, nav, footer').remove();
+  const actions = [
+    ...new Set(
+      $('a, button')
+        .map((_, el) => squash($(el).text()))
+        .get()
+        .filter((label) => label.length > 0 && label.length <= 60)
+    ),
+  ]
+    .slice(0, 40)
+    .join(' | ');
+  const content = squash($('body').text());
+
+  const full = [
+    `Title: ${title}`,
+    `Meta Description: ${metaDescription}`,
+    `Main Heading (H1): ${h1}`,
+    `Section Headings (H2): ${h2}`,
+    `Subsection Headings (H3): ${h3}`,
+    `Navigation: ${navigation}`,
+    `Content: ${content}`,
+    `Links and Buttons: ${actions}`,
+    `Image Alt Text: ${altText}`,
+    `Footer: ${footer}`,
+  ].join('\n');
+
+  const text = cutText(full, PAGE_TEXT_CAP);
+  return { url, title: title || 'Untitled', text, truncated: text !== full, facts };
 }
 
 function normalizeUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    // Remove trailing slash
-    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/$/, '');
-  } catch {
-    // Try adding https:// if not present
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      return normalizeUrl(`https://${url}`);
-    }
-    throw new Error('Invalid URL format');
-  }
+  const parsed = new URL(url);
+  // no query, no fragment, no trailing slash
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/$/, '');
 }
 
-// On success, `url` is the normalised URL the rest of the pipeline should use.
+const URL_ERRORS: Partial<Record<UnsafeUrlError['code'], string>> = {
+  BLOCKED_SCHEME: 'URL must use HTTP or HTTPS protocol',
+  HAS_CREDENTIALS: 'URL must not include a username or password',
+  BLOCKED_PORT: 'URL must not include a port number',
+};
+
+// Rule 1 of the fetch guard, before any request: scheme, credentials, port, length, plus a real-looking host.
+// On success, `url` is the normalised URL the rest of the pipeline should use. Messages never echo the input.
 export function validateUrl(url: string): { valid: boolean; error?: string; url?: string } {
   try {
-    const normalized = normalizeUrl(url);
-    const parsed = new URL(normalized);
+    const trimmed = url.trim();
+    // a bare domain ("example.com/page") gets https://; anything that already names a scheme is judged as written
+    const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+    const parsed = checkUrl(candidate);
 
-    // Basic validation
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      return { valid: false, error: 'URL must use HTTP or HTTPS protocol' };
-    }
-
-    if (!parsed.hostname.includes('.')) {
+    if (!parsed.hostname.includes('.') && !parsed.hostname.includes(':')) {
       return { valid: false, error: 'URL must include a valid domain' };
     }
 
-    return { valid: true, url: normalized };
-  } catch {
-    return { valid: false, error: 'Invalid URL format' };
+    return { valid: true, url: normalizeUrl(parsed.href) };
+  } catch (error) {
+    const message = error instanceof UnsafeUrlError ? URL_ERRORS[error.code] : undefined;
+    return { valid: false, error: message || 'Invalid URL format' };
   }
 }

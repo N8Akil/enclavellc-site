@@ -1,6 +1,7 @@
 // src/lib/audit/send-emails.ts
 import { escapeHtml } from '@/lib/email/escape';
 import { getResendClient } from '@/lib/email/resend-client';
+import { HOW_MADE_HEADING, areasReadPhrase, assessedCategories, evidenceLine, howMadeText, scoreLine } from './present';
 import type { AuditResults } from './types';
 
 interface SendEmailsOptions {
@@ -80,7 +81,16 @@ function generateUserEmailHtml(
   auditResults: AuditResults
 ): string {
   // everything below comes from the visitor or from their site: escape it
-  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i => escapeHtml(i.title));
+  // (model text and quotes from the site are untrusted: nothing reaches the HTML unescaped)
+  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i =>
+    `${escapeHtml(i.title)}<br><span style="color: #666666; font-size: 13px;">${escapeHtml(evidenceLine(i.evidence))}</span>`
+  );
+  // every area, with a score only where one was assessed
+  const areaRows = auditResults.categories.map(c =>
+    c.assessed
+      ? `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.score)} of 10</li>`
+      : `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.reason)}</li>`
+  );
   const topStrengths = auditResults.topStrengths.slice(0, 2).map(s => escapeHtml(s.title));
   const name = escapeHtml(userName || 'there');
   const site = escapeHtml(websiteUrl);
@@ -112,7 +122,7 @@ function generateUserEmailHtml(
               <div style="display: inline-block; background-color: ${getScoreColor(auditResults.overallScore)}; color: white; font-size: 48px; font-weight: bold; padding: 20px 40px; border-radius: 8px;">
                 ${auditResults.overallScore.toFixed(1)}/10
               </div>
-              <p style="margin-top: 10px; color: #666666; font-size: 14px;">Overall Score</p>
+              <p style="margin-top: 10px; color: #666666; font-size: 14px;">${escapeHtml(scoreLine(auditResults))}</p>
             </td>
           </tr>
 
@@ -140,8 +150,17 @@ function generateUserEmailHtml(
               </ul>
               ` : ''}
 
+              <h3 style="color: #333333; margin-top: 25px;">Area by area</h3>
+              <ul style="color: #333333; font-size: 14px; line-height: 1.8;">
+                ${areaRows.join('')}
+              </ul>
+
               <p style="color: #333333; font-size: 16px; line-height: 1.6; margin-top: 25px;">
-                Your full audit report is attached to this email. It includes detailed analysis across 8 key areas, specific recommendations, and a prioritized action plan.
+                Your full audit report is attached to this email. It covers ${escapeHtml(areasReadPhrase(auditResults))}, with the evidence behind each finding, specific recommendations, and a prioritized action plan.
+              </p>
+
+              <p style="color: #666666; font-size: 13px; line-height: 1.6; margin-top: 25px;">
+                <strong>${escapeHtml(HOW_MADE_HEADING)}.</strong> ${escapeHtml(howMadeText(auditResults))}
               </p>
             </td>
           </tr>
@@ -185,8 +204,9 @@ function generateAdminEmailHtml(
 ): string {
   const { categories, overallScore, criticalIssues } = auditResults;
 
-  // Find highest and lowest scoring categories
-  const sortedCategories = [...categories].sort((a, b) => b.score - a.score);
+  // Find highest and lowest scoring categories, among the areas that were assessed
+  const sortedCategories = assessedCategories(auditResults).sort((a, b) => b.score - a.score);
+  const notAssessed = categories.filter(c => !c.assessed).map(c => c.name);
   const highest = sortedCategories[0];
   const lowest = sortedCategories[sortedCategories.length - 1];
 
@@ -251,6 +271,10 @@ function generateAdminEmailHtml(
           <li><strong>Highest Score:</strong> ${escapeHtml(highest?.name || 'N/A')} (${escapeHtml(highest?.score || 'N/A')})</li>
           <li><strong>Lowest Score:</strong> ${escapeHtml(lowest?.name || 'N/A')} (${escapeHtml(lowest?.score || 'N/A')})</li>
           <li><strong>Critical Issues:</strong> ${criticalIssues.length}</li>
+          <li><strong>Score covers:</strong> ${escapeHtml(areasReadPhrase(auditResults))}</li>
+          <li><strong>Not assessed:</strong> ${escapeHtml(notAssessed.join(', ') || 'none')}</li>
+          <li><strong>Pages read:</strong> ${auditResults.pagesRead.length}</li>
+          <li><strong>Findings removed (evidence did not check out):</strong> ${escapeHtml(auditResults.droppedFindings)}</li>
         </ul>
 
         <p style="color: #666666; font-size: 12px; margin-top: 25px;">
