@@ -7,6 +7,8 @@ import localFont from 'next/font/local'
 import { crew, crewSrc, mobileCardFrame, pad } from './crew'
 import { NightCrewMotion } from './night-crew-motion'
 import { NightAuditForm, NightBook } from './night-forms'
+import { NightCoverage } from './night-coverage'
+import { NightDock } from './night-dock'
 import './night.css'
 
 // Preview of the new home page (concept D · Night Crew). Not linked from anywhere and kept out of search.
@@ -85,7 +87,7 @@ export default function NightPage() {
               </div>
               <div>
                 <p className="sub">Your website, your follow-up and your content keep working after you close. One founder, six AI partners, one studio.</p>
-                <div className="row"><a className="btn gold" href="#audit">Get a free site audit</a><a className="btn" href="#crew">Meet the crew</a></div>
+                <NightAuditForm variant="hero" />
               </div>
             </div>
           </div>
@@ -180,16 +182,8 @@ export default function NightPage() {
 
         <section className="sec flush" id="make" aria-labelledby="make-h">
           <div className="wrap">
-            <div className="head rv"><SecSlate scene="04" loc="Coverage" /><h2 className="h2" id="make-h">What we make</h2><p>Start with the free audit. Take one piece or the whole production.</p></div>
-            <div className="coverage rv">
-              <article className="cov first"><span className="mono">Start here · free</span><h3>Site audit</h3><p>Send your web address and get a plain-language report on what is working and what is costing you customers.</p><a href="#audit">Send your web address</a><span className="who mono">Osiris + Isis</span></article>
-              <article className="cov"><h3>Website rebuild</h3><p>Fast, mobile-first and easy to find, built to turn visitors into calls.</p><span className="who mono">Isis + Thoth</span></article>
-              <article className="cov"><h3>iPhone apps</h3><p>Native apps built in Swift: fast, accessible, and connected to your site and the tools you already use.</p><span className="soon mono">Android · coming soon</span><span className="who mono">Isis + Thoth</span></article>
-              <article className="cov"><h3>Automation</h3><p>Forms, notifications, scheduling and follow-up that run without you.</p><span className="who mono">Thoth + Ra</span></article>
-              <article className="cov"><h3>Content and video</h3><p>Posts, graphics, newsletters and training videos in your voice.</p><span className="who mono">Horus</span></article>
-              <article className="cov"><h3>Social media</h3><p>A steady schedule across your platforms, with replies and simple reporting.</p><span className="who mono">Horus</span></article>
-              <article className="cov"><h3>Full overhaul</h3><p>All of it together, planned end to end, with priority support after launch.</p><span className="who mono">The whole crew</span></article>
-            </div>
+            <div className="head rv"><SecSlate scene="04" loc="Coverage" /><h2 className="h2" id="make-h">What we make</h2><p>Start with the free audit. Then tap the pieces you want and book a call about exactly those.</p></div>
+            <NightCoverage />
           </div>
         </section>
 
@@ -247,6 +241,7 @@ export default function NightPage() {
       </main>
       <footer><div className="wrap"><span>© Enclave LLC</span><span>Investor questions: [investor email]</span></div></footer>
 
+      <NightDock />
       <NightCrewMotion />
     </div>
   )

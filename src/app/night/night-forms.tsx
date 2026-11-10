@@ -28,12 +28,16 @@ const auditSchema = z.object({
 
 type AuditValues = z.infer<typeof auditSchema>
 
-export function NightAuditForm() {
+// variant 'hero' is the same form in the opening shot: website and email only. The name is optional in the schema and is
+// sent as '' there, which is what the full form sends when its Name field is left blank.
+export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }) {
+  const hero = variant === 'hero'
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [resultMessage, setResultMessage] = useState('')
 
   const { register, handleSubmit, formState: { errors }, reset } = useForm<AuditValues>({
     resolver: zodResolver(auditSchema),
+    defaultValues: { userName: '' },
   })
 
   const onSubmit = async (values: AuditValues) => {
@@ -75,6 +79,21 @@ export function NightAuditForm() {
   const note = fieldError || (loading ? 'Analyzing & Sending...' : resultMessage)
   const isErr = !!fieldError || status === 'error'
 
+  if (hero) {
+    return (
+      <form className="audit hero-audit" id="audit-hero" aria-label="Free site audit" onSubmit={handleSubmit(onSubmit)} aria-busy={loading} noValidate>
+        <div className="hero-fields">
+          <label>Your website<input {...register('websiteUrl')} type="text" inputMode="url" autoComplete="url" placeholder="yourbusiness.com" required aria-invalid={!!errors.websiteUrl} disabled={loading} /></label>
+          <label>Where to send it<input {...register('userEmail')} type="email" autoComplete="email" placeholder="you@yourbusiness.com" required aria-invalid={!!errors.userEmail} disabled={loading} /></label>
+        </div>
+        <div className="hero-go">
+          <button className="btn gold" type="submit" disabled={loading}>Send my free audit</button>
+          <p className={isErr ? 'note err' : 'note'} id="auditHeroNote" role="status">{note || 'Free. A plain-language report, in your inbox in a few minutes.'}</p>
+        </div>
+      </form>
+    )
+  }
+
   return (
     <form className="audit" id="audit" tabIndex={-1} aria-labelledby="audit-h" onSubmit={handleSubmit(onSubmit)} aria-busy={loading}>
       <span className="k mono">Start here · free</span>
@@ -108,7 +127,7 @@ export function NightBook() {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
   const formRef = useRef<HTMLFormElement>(null)
 
-  const { register, handleSubmit, formState: { errors, isSubmitting }, reset } = useForm<ContactValues>({
+  const { register, handleSubmit, formState: { errors, isSubmitting }, reset, setValue } = useForm<ContactValues>({
     resolver: zodResolver(contactSchema),
     defaultValues: {
       service: 'Not sure yet',
@@ -138,6 +157,20 @@ export function NightBook() {
       setResult({ ok: false, text: 'We could not send your message. Please email n.garrett@enclavellc.net or try again.' })
     }
   }
+
+  // "nc:book" (the coverage slate, the dock): open the form; a slate pick arrives as a draft message the visitor can edit
+  useEffect(() => {
+    const onBook = (e: Event) => {
+      const d = (e as CustomEvent<{ message?: string; service?: ContactValues['service'] }>).detail
+      if (d?.message) setValue('message', d.message, { shouldValidate: false })
+      if (d?.service) setValue('service', d.service)
+      setResult(null)
+      setOpen(true)
+      requestAnimationFrame(() => formRef.current?.querySelector<HTMLInputElement>('input')?.focus())
+    }
+    window.addEventListener('nc:book', onBook)
+    return () => window.removeEventListener('nc:book', onBook)
+  }, [setValue])
 
   // opening the form moves focus into it (focus scrolls it into view)
   useEffect(() => {
