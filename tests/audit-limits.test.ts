@@ -201,3 +201,20 @@ describe('audit limits', () => {
     })
   })
 })
+
+describe('more than one process', () => {
+  it('a cluster worker refuses every request with the site-wide message, and counts nothing (the limits are per process)', () => {
+    let worker = true
+    const limiter = createAuditLimiter({ now: () => Date.UTC(2026, 10, 10, 12), isClusterWorker: () => worker })
+    expect(limiter.check('203.0.113.9', 'a@example.com')).toEqual({ allowed: false, cause: 'daily' })
+    expect(limiter.size()).toEqual({ ips: 0, emails: 0, global: 0 })
+    // separating control: the same limiter, same request, in a single process, is allowed and counted
+    worker = false
+    expect(limiter.check('203.0.113.9', 'a@example.com')).toEqual({ allowed: true })
+    expect(limiter.size()).toEqual({ ips: 1, emails: 1, global: 1 })
+  })
+  it('this test process is not a cluster worker, so the default limiter counts normally', () => {
+    const limiter = createAuditLimiter({ now: () => Date.UTC(2026, 10, 10, 12) })
+    expect(limiter.check('203.0.113.10', 'b@example.com')).toEqual({ allowed: true })
+  })
+})

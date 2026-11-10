@@ -16,9 +16,13 @@
 // Nothing here is logged. Keys are SHA-256 hashes of the IP and of the lower-cased email, and a key is
 // dropped as soon as its window has passed.
 //
+// More than one process: a PM2 cluster worker refuses every request (see decide()). The limits need a shared store
+// before the site can run that way.
+//
 // The daily ceiling FAILS CLOSED: if anything about the check throws, the clock is not a number, or the
 // counter is not in a state this code wrote, the request is refused as if the daily limit were reached.
 
+import cluster from 'node:cluster';
 import { createHash } from 'node:crypto';
 import { DEFAULT_DAILY_LIMIT, RATE_LIMITS } from './config';
 import { auditSetting } from './env';
@@ -38,6 +42,8 @@ export interface DailyState {
 
 export interface AuditLimiterOptions {
   now?: () => number;
+  // true when this process is one of several workers sharing the port (PM2 cluster mode); injectable for tests
+  isClusterWorker?: () => boolean;
   // the ceiling for audits started per UTC day; read on every check
   dailyLimit?: () => number;
   // the daily counter; injectable so a test can put it in a broken state
@@ -70,6 +76,7 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
   const now = options.now ?? (() => Date.now());
   const dailyLimit = options.dailyLimit ?? (() => parseDailyLimit(auditSetting('AUDIT_DAILY_LIMIT')));
   const daily: DailyState = options.dailyState ?? { day: -1, count: 0 };
+  const isClusterWorker = options.isClusterWorker ?? (() => cluster.isWorker);
   const byIp = new Map<string, number[]>();
   const byEmail = new Map<string, number[]>();
   let globalHits: number[] = [];
@@ -85,6 +92,10 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
     Math.max(1, Math.ceil((oldest + windowMs - t) / 1000));
 
   function decide(ip: string, email: string): LimitDecision {
+    // These counts are only the real limits in ONE process. The site's PM2 entry was made by hand (fork mode, one
+    // instance, read on the server 2026-11-10); if it is ever started in cluster mode every worker would keep its own
+    // counts and each limit would multiply. So a cluster worker refuses outright instead of counting: fail closed.
+    if (isClusterWorker()) return { allowed: false, cause: 'daily' };
     const t = now();
     if (!Number.isFinite(t)) return { allowed: false, cause: 'daily' };
     const limit = dailyLimit();
