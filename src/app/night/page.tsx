@@ -153,7 +153,7 @@ export default function NightPage() {
         </section>
 
         <section className="sec flush" id="crew" aria-labelledby="crew-h">
-          <div className="wrap"><div className="head rv"><SecSlate scene="03" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p>Scroll and each one steps into the light, starting with the director. The monitor shows the kind of work they do for you; it is an illustration, not live data.</p></div></div>
+          <div className="wrap"><div className="head rv"><SecSlate scene="03" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p><span className="only-desk">Scroll and each one steps into the light, starting with the director. The monitor shows the kind of work they do for you; it is an illustration, not live data.</span><span className="only-phone">Swipe to meet each one, starting with the director.</span></p></div></div>
           <div className="crew-track" id="crewTrack" style={css({ '--n': crew.length })}>
             <div className="crew-pin wrap" id="crewPin">
               <nav className="names" aria-label="Scenes">
@@ -178,7 +178,7 @@ export default function NightPage() {
                   )
                 })}
               </div>
-              <p className="swipe mono" aria-hidden="true">Swipe · seven on the crew</p>
+              <p className="swipe mono" aria-hidden="true">Swipe · Nate and six partners</p>
             </div>
           </div>
           <div className="wrap"><p className="joining mono">Also on the call sheet: Naunet and Amaunet. Their portraits are still being shot.</p></div>

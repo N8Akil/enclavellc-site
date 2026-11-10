@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { hostOf, readTypedUrl } from './night-forms'
+import { currentSlate } from './night-coverage'
 
 // The audit stays one tap away for the length of the page: a slim bar that comes up once the opening shot and the
 // report section (each with its own audit button) have scrolled off, and steps aside whenever the coverage slate or
@@ -21,7 +22,7 @@ export function NightDock() {
   useEffect(() => {
     const gate = document.getElementById('report') ?? document.getElementById('audit-hero')
     const end = document.getElementById('book')
-    const slip = document.querySelector('.nc .slip')
+    const slip = document.getElementById('make')   // the whole coverage section: its slate has its own button
     if (!gate || !end) return
 
     const onScreen = (el: Element | null) => {
@@ -48,19 +49,19 @@ export function NightDock() {
   const toAudit = () => {
     const f = document.getElementById('audit')
     f?.scrollIntoView({ block: 'center' })
-    // with the address already carried over, the next empty field is the one to land on
+    // with the address already carried over, land on the next REQUIRED field that is still empty (the email)
     const fields = [...(f?.querySelectorAll<HTMLInputElement>('input') ?? [])]
-    ;(fields.find((i) => !i.value) ?? fields[0])?.focus({ preventScroll: true })
+    ;(fields.find((i) => i.required && !i.value) ?? fields[0])?.focus({ preventScroll: true })
   }
   const toBook = () => {
-    window.dispatchEvent(new CustomEvent('nc:book', { detail: {} }))
+    window.dispatchEvent(new CustomEvent('nc:book', { detail: currentSlate() ?? {} }))
     document.getElementById('book')?.scrollIntoView({ block: 'start' })
   }
 
   return (
     <div className={show ? 'dock show' : 'dock'} role="region" aria-label="Start here" inert={!show}>
       {host
-        ? <p><b>{host}</b><span> is one field from its free audit.</span></p>
+        ? <p><b>{host}</b><span> has a free audit waiting. Add your email.</span></p>
         : <p><b>Free site audit.</b><span> A plain-language report, in your inbox in a few minutes.</span></p>}
       <button className="btn gold" type="button" onClick={toAudit}>{host ? 'Finish the audit' : 'Get the audit'}</button>
       <button className="link" type="button" onClick={toBook}>or book a call</button>

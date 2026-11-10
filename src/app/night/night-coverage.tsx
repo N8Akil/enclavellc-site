@@ -17,6 +17,10 @@ const pieces: Piece[] = [
   { id: 'all', h: 'Full overhaul', p: 'All of it together, planned end to end, with priority support after launch.', who: WHOLE },
 ]
 
+// what is on the slate right now, for the other "book a call" entries (the dock, the header button)
+let slate: { message: string; service: Service } | null = null
+export const currentSlate = () => slate
+
 const list = (xs: string[]) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`)
 
 export function NightCoverage() {
@@ -33,12 +37,13 @@ export function NightCoverage() {
   const crew = WHOLE.filter((n) => picked.some((p) => p.who.includes(n)))
   const names = picked.map((p) => p.h)
 
+  const services = picked.map((p) => p.service).filter(Boolean) as Service[]
+  slate = picked.length
+    ? { message: `I would like to talk about: ${list(names)}.`, service: picked.length === 1 && services.length === 1 ? services[0] : 'Not sure yet' }
+    : null
+
   const book = () => {
-    const services = picked.map((p) => p.service).filter(Boolean) as Service[]
-    window.dispatchEvent(new CustomEvent('nc:book', { detail: {
-      message: `I would like to talk about: ${list(names)}.`,
-      service: picked.length === 1 && services.length === 1 ? services[0] : 'Not sure yet',
-    } }))
+    window.dispatchEvent(new CustomEvent('nc:book', { detail: slate ?? {} }))
     document.getElementById('book')?.scrollIntoView({ block: 'start' })
   }
 

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { currentSlate } from './night-coverage'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Free site audit. Mirrors src/components/website-audit-form.tsx: the same schema, the same POST to
@@ -40,8 +41,9 @@ const shareTypedUrl = (v: string) => {
 // the host a visitor would recognise as theirs, or '' while what they have typed is not an address yet
 export const hostOf = (v: string) => {
   try {
+    if (/[\s%]/.test(v)) return ''
     const h = new URL(v.startsWith('http') ? v : `https://${v}`).hostname.replace(/^www\./, '')
-    return h.includes('.') && h.length <= 48 && !h.endsWith('.') ? h : ''
+    return /^[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}$/i.test(h) && h.length <= 48 ? h : ''
   } catch { return '' }
 }
 
@@ -52,24 +54,29 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
   const [resultMessage, setResultMessage] = useState('')
 
-  const { register, handleSubmit, formState: { errors }, reset, setValue, getValues, watch } = useForm<AuditValues>({
+  const { register, handleSubmit, formState: { errors, dirtyFields }, reset, setValue, getValues, watch } = useForm<AuditValues>({
     resolver: zodResolver(auditSchema),
     defaultValues: { userName: '' },
   })
 
   // what this form's address field holds is shared; an address typed in the other form fills this one while it is empty
+  // (only once the visitor has edited THIS field: a carried-over value is not dirty, so the empty form never clears the other's)
   const typed = watch('websiteUrl')
+  const edited = !!dirtyFields.websiteUrl
   useEffect(() => {
+    if (!edited) return
     const v = (typed || '').trim()
-    if (hostOf(v) && v !== readTypedUrl()) shareTypedUrl(v)
-  }, [typed])
+    const next = hostOf(v) ? v : ''
+    if (next !== readTypedUrl()) shareTypedUrl(next)
+  }, [typed, edited])
   useEffect(() => {
-    const fill = (v: string) => { if (v && !getValues('websiteUrl')) setValue('websiteUrl', v) }
+    // fills an empty field, follows the other form while this one is untouched, and empties with it
+    const fill = (v: string) => { if (!dirtyFields.websiteUrl && getValues('websiteUrl') !== v) setValue('websiteUrl', v) }
     fill(readTypedUrl())
     const onUrl = (e: Event) => fill((e as CustomEvent<string>).detail)
     window.addEventListener('nc:url', onUrl)
     return () => window.removeEventListener('nc:url', onUrl)
-  }, [getValues, setValue])
+  }, [getValues, setValue, dirtyFields.websiteUrl])
 
   const onSubmit = async (values: AuditValues) => {
     setStatus('loading')
@@ -127,11 +134,11 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
   }
 
   return (
-    <form className="audit" id="audit" tabIndex={-1} aria-labelledby="audit-h" onSubmit={handleSubmit(onSubmit)} aria-busy={loading}>
+    <form className="audit" id="audit" tabIndex={-1} aria-labelledby="audit-h" onSubmit={handleSubmit(onSubmit)} aria-busy={loading} noValidate>
       <span className="k mono">Start here · free</span>
       <h3 id="audit-h">Free site audit</h3>
       <label>Website<input {...register('websiteUrl')} type="text" inputMode="url" autoComplete="url" placeholder="yourbusiness.com" required aria-invalid={!!errors.websiteUrl} disabled={loading} /></label>
-      <label>Name<input {...register('userName')} type="text" autoComplete="name" aria-invalid={!!errors.userName} disabled={loading} /></label>
+      <label>Name (optional)<input {...register('userName')} type="text" autoComplete="name" aria-invalid={!!errors.userName} disabled={loading} /></label>
       <label>Email<input {...register('userEmail')} type="email" autoComplete="email" required aria-invalid={!!errors.userEmail} disabled={loading} /></label>
       <button className="btn solid" type="submit" disabled={loading}>Send for the audit</button>
       <p className={isErr ? 'note err' : 'note'} id="auditNote" role="status">{note}</p>
@@ -201,7 +208,11 @@ export function NightBook() {
       requestAnimationFrame(() => formRef.current?.querySelector<HTMLInputElement>('input')?.focus())
     }
     window.addEventListener('nc:book', onBook)
-    return () => window.removeEventListener('nc:book', onBook)
+    // plain "#book" links (the header button) open the form too, with whatever is on the slate
+    const links = [...document.querySelectorAll<HTMLAnchorElement>('.nc a[href="#book"]')]
+    const onLink = () => window.dispatchEvent(new CustomEvent('nc:book', { detail: currentSlate() ?? {} }))
+    links.forEach((a) => a.addEventListener('click', onLink))
+    return () => { window.removeEventListener('nc:book', onBook); links.forEach((a) => a.removeEventListener('click', onLink)) }
   }, [setValue])
 
   // opening the form moves focus into it (focus scrolls it into view)
