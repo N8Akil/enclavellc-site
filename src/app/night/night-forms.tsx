@@ -147,7 +147,7 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// "Book a call". There is no booking link yet, so the button opens a contact form. It mirrors
+// "Request a call" (was "Book a call": there is no booking link yet, so the label says what happens). It opens a contact form. It mirrors
 // src/components/contact-form.tsx: the same schema and default, the same POST of the raw values to /api/contact,
 // the same success (res.ok) message, and on failure the API's own error (or the same fallback address).
 // ---------------------------------------------------------------------------------------------------------------
@@ -229,11 +229,11 @@ export function NightBook() {
       <div className="bookbox">
         <button className="btn gold" id="bookLink" type="button" aria-expanded={open} aria-controls="contact"
           onClick={() => { if (open) formRef.current?.querySelector<HTMLInputElement>('input')?.focus(); else setOpen(true) }}>
-          Book a call
+          Request a call
         </button>
       </div>
-      <form className="audit contact" id="contact" ref={formRef} hidden={!open} aria-label="Book a call" onSubmit={handleSubmit(onSubmit)} aria-busy={isSubmitting}>
-        <span className="k mono">Book a call</span>
+      <form className="audit contact" id="contact" ref={formRef} hidden={!open} aria-label="Request a call" onSubmit={handleSubmit(onSubmit)} aria-busy={isSubmitting}>
+        <span className="k mono">Request a call</span>
         <label>Name<input {...register('name')} autoComplete="name" placeholder="Your name" aria-invalid={!!errors.name} /></label>
         <label>Email<input {...register('email')} autoComplete="email" placeholder="you@company.com" aria-invalid={!!errors.email} /></label>
         <label>Phone (optional)<input {...register('phone')} autoComplete="tel" inputMode="tel" placeholder="(###) ###-####" aria-invalid={!!errors.phone} /></label>
@@ -246,7 +246,7 @@ export function NightBook() {
           </select>
         </label>
         <label>Message<textarea {...register('message')} placeholder="Tell us what’s going on (current site, what you want fixed, etc.)" aria-invalid={!!errors.message} /></label>
-        <button className="btn solid" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Sending…' : 'Send Request'}</button>
+        <button className="btn solid" type="submit" disabled={isSubmitting}>{isSubmitting ? 'Sending…' : 'Send request'}</button>
         <p className={isErr ? 'note err' : 'note'} id="contactNote" role="status">{note}</p>
       </form>
     </>

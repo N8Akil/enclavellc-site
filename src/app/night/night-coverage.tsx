@@ -50,7 +50,7 @@ export function NightCoverage() {
   return (
     <>
       <div className="coverage rv">
-        <article className="cov first"><span className="mono">Start here · free</span><h3>Site audit</h3><p>Send your web address and get a plain-language report on what is working and what is costing you customers.</p><a href="#audit">Send your web address</a><span className="who mono">Osiris + Isis</span></article>
+        <article className="cov first"><span className="mono">Start here · free</span><h3>Site audit</h3><p>Send your web address and get a plain-language report on what is working and what is costing you customers.</p><a href="#audit">Send your web address</a><span className="who mono">Automatic · a few minutes</span></article>
         {pieces.map((p) => {
           const sel = on.includes(p.id)
           return (
@@ -73,7 +73,7 @@ export function NightCoverage() {
                 <p className="slip-crew"><span className="mono">On the job</span>{list(crew)}. Osiris checks it, Nate approves it.</p>
               </>}
         </div>
-        <button className="btn gold" type="button" onClick={book} disabled={picked.length === 0}>Book a call about this</button>
+        <button className="btn gold" type="button" onClick={book} disabled={picked.length === 0}>Request a call about this</button>
       </div>
     </>
   )

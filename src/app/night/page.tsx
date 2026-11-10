@@ -73,7 +73,7 @@ export default function NightPage() {
           <div className="tools">
             <span className="rec mono" id="rec" aria-hidden="true"><i></i><span id="recTxt">Rolling</span></span>
             <button className="theme" id="theme" type="button" aria-label="Switch to the day set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4.5" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></svg><span id="themeLabel">Day</span></button>
-            <a className="btn gold" href="#book">Book<span className="long">{' '}a call</span></a>
+            <a className="btn gold" href="#book">Request<span className="long">{' '}a call</span></a>
           </div>
         </div>
       </header>
@@ -153,7 +153,7 @@ export default function NightPage() {
         </section>
 
         <section className="sec flush" id="crew" aria-labelledby="crew-h">
-          <div className="wrap"><div className="head rv"><SecSlate scene="03" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p><span className="only-desk">Scroll and each one steps into the light, starting with the director. The monitor shows the kind of work they do for you; it is an illustration, not live data.</span><span className="only-phone">Swipe to meet each one, starting with the director.</span></p></div></div>
+          <div className="wrap"><div className="head rv"><SecSlate scene="03" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p>Nate is the founder. The six partners are AI agents who work with him, and their portraits are generated images, not photographs of people. <span className="only-desk">Scroll and each one steps into the light, starting with Nate. The monitor shows the kind of work they do for you; it is an illustration, not live data.</span><span className="only-phone">Swipe to meet each one, starting with Nate.</span></p></div></div>
           <div className="crew-track" id="crewTrack" style={css({ '--n': crew.length })}>
             <div className="crew-pin wrap" id="crewPin">
               <nav className="names" aria-label="Scenes">
@@ -181,12 +181,12 @@ export default function NightPage() {
               <p className="swipe mono" aria-hidden="true">Swipe · Nate and six partners</p>
             </div>
           </div>
-          <div className="wrap"><p className="joining mono">Also on the call sheet: Naunet and Amaunet. Their portraits are still being shot.</p></div>
+          <div className="wrap"><p className="joining mono">Joining soon: Naunet and Amaunet, two more AI partners.</p></div>
         </section>
 
         <section className="sec flush" id="make" aria-labelledby="make-h">
           <div className="wrap">
-            <div className="head rv"><SecSlate scene="04" loc="Coverage" /><h2 className="h2" id="make-h">What we make</h2><p>Start with the free audit. Then tap the pieces you want and book a call about exactly those.</p></div>
+            <div className="head rv"><SecSlate scene="04" loc="Coverage" /><h2 className="h2" id="make-h">What we make</h2><p>Start with the free audit. Then tap the pieces you want and request a call about exactly those.</p></div>
             <NightCoverage />
           </div>
         </section>
@@ -195,7 +195,7 @@ export default function NightPage() {
           <div className="wrap">
             <div className="head rv"><SecSlate scene="05" loc="Production board" /><h2 className="h2" id="how-h">The shooting schedule</h2><p>Five scenes on the board, and the founder is on set for every one.</p></div>
             <ol className="steps rv">
-              <li><h3>Free audit</h3><p>We review your site and send the report.</p></li>
+              <li><h3>Free audit</h3><p>Send your web address. The report is generated automatically and emailed to you.</p></li>
               <li><h3>Call with the founder</h3><p>We talk through your business and goals.</p></li>
               <li><h3>Plan and quote</h3><p>Amun maps the work. You get one clear price.</p></li>
               <li><h3>Build</h3><p>The crew builds. Osiris checks everything before you see it.</p></li>
@@ -231,7 +231,7 @@ export default function NightPage() {
           <div className="wrap end" id="book" tabIndex={-1}>
             <div className="end-copy">
               <h2 id="end-h">Your scene is next.</h2>
-              <p>Book a call with Nate, or start with the free audit. You will hear back from a person.</p>
+              <p>Request a call and Nate replies to you himself. Or start with the free audit: that report is generated automatically and arrives by email in a few minutes.</p>
               <NightBook />
             </div>
             <NightAuditForm />
