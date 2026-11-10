@@ -20,7 +20,8 @@ export function NightClock() {
   return (
     <p className={closed ? 'clock mono late' : 'clock mono'}>
       <i aria-hidden="true"></i><b>{time}</b> where you are.{' '}
-      {closed ? 'You are closed. Your website is still open.' : 'When you close tonight, your website stays open.'}
+      {/* never asserts the reader's hours (Osiris, #5): a bar or an on-call trade is open at 9 pm */}
+      {closed ? 'If you’re closed, your website is still open.' : 'When you close tonight, your website stays open.'}
     </p>
   )
 }
