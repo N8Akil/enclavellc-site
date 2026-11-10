@@ -437,3 +437,21 @@ html:has(.nc) body{background:transparent}
 .nc .cov.first a{display:inline-flex;align-items:center;min-height:44px;text-decoration:underline}
 .nc .dock .link{min-height:44px;display:inline-flex;align-items:center;padding-block:0}
 @media (max-width:560px){.nc .top .btn{min-height:44px}.nc .theme{width:44px;height:44px}}
+
+/* ---- phone and narrow tablet (the one-column hero): the crew takes the opening shot, the audit form follows them (N8, 2026-11-10).
+   Markup order is unchanged (headline, pitch, form, crew), so desktop and the reading order for assistive tech stay as they were;
+   the stage holds nothing focusable, so tab order still matches what is seen. The head wrappers dissolve so the form can be placed
+   after the stage; each loose piece takes the gutter the wrapper gave it. ---- */
+@media (max-width:860px){
+  .nc .open{display:flex;flex-direction:column}
+  .nc .open>.wrap{width:100%}
+  .nc .open>.wrap:first-child,.nc .open-head,.nc .open-head>div{display:contents}
+  .nc .open .slate,.nc .open .h1,.nc .open .sub,.nc .open .hero-audit,.nc .open .clock{margin-inline:var(--gut)}
+  .nc .open .sub{margin-top:20px}
+  .nc .open>.matte.lead{order:1}
+  .nc .open>.wrap:nth-child(3){order:2}
+  .nc .open .hero-audit{order:3;margin-top:28px;max-width:none}
+  .nc .open .clock{order:3}
+  .nc .open>.matte:not(.lead){order:4}
+  .nc .open>.wrap:last-child{order:5}
+}
