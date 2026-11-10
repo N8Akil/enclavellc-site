@@ -1,17 +1,29 @@
 // src/lib/audit/fetch-website.ts
-// Reads the target site's homepage and up to MAX_LINKED_PAGES same-host pages it links to.
+// Reads the target site's homepage and up to MAX_LINKED_PAGES same-host pages it links to, then asks the site a
+// few more things (robots.txt, sitemap.xml, whether http:// leads to https://, whether its own links answer).
 // Every request goes through safe-fetch.ts; nothing here opens a connection itself.
+// Only the audited site's own host is ever asked. robots.txt and sitemap.xml are READ, NEVER FOLLOWED: no address
+// found inside either file is requested.
 
 import * as cheerio from 'cheerio';
 import {
   AUDIT_FETCH_DEADLINE_MS,
+  MAX_LINK_CHECKS,
   MAX_LINKED_PAGES,
   PAGE_TEXT_CAP,
   TOTAL_TEXT_CAP,
   TRUNCATION_MARKER,
 } from './config';
-import { checkUrl, safeFetchPage, UnsafeUrlError, type SafeFetchOptions } from './safe-fetch';
-import type { FetchedPage, PageFacts, PageSegment, WebsiteContent } from './types';
+import {
+  PLAIN_TEXT_TYPES,
+  XML_TYPES,
+  checkUrl,
+  safeCheckLink,
+  safeFetchPage,
+  UnsafeUrlError,
+  type SafeFetchOptions,
+} from './safe-fetch';
+import type { FetchedPage, PageFacts, PageLink, PageSegment, SiteProbes, WebsiteContent } from './types';
 
 export interface FetchWebsiteOptions extends Pick<SafeFetchOptions, 'resolver' | 'transport' | 'timeoutMs' | 'maxBytes'> {
   // whole-audit time limit across all page requests
@@ -58,11 +70,132 @@ export async function fetchWebsiteContent(url: string, options: FetchWebsiteOpti
       seen.add(page.url);
       pages.push(page);
     }
-    return { pages: capTotal(pages) };
+    const probes = await probeSite(home.finalUrl, pages, guarded, deadline.signal, concurrency);
+    return { pages: capTotal(pages), probes };
   } finally {
     clearTimeout(timer);
     deadline.abort();
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The site besides its pages. All of it on the host that answered, through the guard, inside the same time budget.
+// ---------------------------------------------------------------------------------------------------------------
+
+// Does robots.txt tell every crawler to stay off the home page? Read from the group for "*": a "Disallow: /"
+// with no "Allow: /" beside it. Nothing in the file is followed.
+export function readRobots(text: string): { disallowsHome: boolean; rule: string } {
+  let inStarGroup = false;
+  let lastWasAgent = false;
+  let disallow = false;
+  let allow = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '').trim();
+    const match = /^([A-Za-z-]+)\s*:\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const field = match[1].toLowerCase();
+    const value = match[2].trim();
+    if (field === 'user-agent') {
+      // consecutive user-agent lines share one group
+      inStarGroup = lastWasAgent ? inStarGroup || value === '*' : value === '*';
+      lastWasAgent = true;
+      continue;
+    }
+    lastWasAgent = false;
+    if (!inStarGroup) continue;
+    if (field === 'disallow' && value === '/') disallow = true;
+    if (field === 'allow' && (value === '/' || value === '/$')) allow = true;
+  }
+  return { disallowsHome: disallow && !allow, rule: 'Disallow: /' };
+}
+
+// How many <loc> entries a sitemap has, or 0 when it is not XML with any. The addresses are counted, never requested.
+export function countSitemapLocs(xml: string): number {
+  try {
+    const $ = cheerio.load(xml, { xmlMode: true });
+    return $('loc').filter((_, el) => squash($(el).text()).length > 0).length;
+  } catch {
+    return 0;
+  }
+}
+
+async function probeSite(
+  homeUrl: string,
+  pages: FetchedPage[],
+  guarded: SafeFetchOptions,
+  deadline: AbortSignal,
+  concurrency: number
+): Promise<SiteProbes> {
+  const home = new URL(homeUrl);
+  const origin = `${home.protocol}//${home.host}`;
+  // missing = the site answered and it is not there; unknown = no answer worth a claim
+  const missingOrUnknown = (error: unknown): 'missing' | 'unknown' =>
+    error instanceof UnsafeUrlError && (error.code === 'HTTP_STATUS' || error.code === 'BAD_CONTENT_TYPE') ? 'missing' : 'unknown';
+
+  const robots = (async (): Promise<SiteProbes['robots']> => {
+    try {
+      const file = await safeFetchPage(`${origin}/robots.txt`, { ...guarded, allowedContentTypes: PLAIN_TEXT_TYPES });
+      // a redirect to another host is not this site's robots.txt
+      if (new URL(file.finalUrl).host !== home.host) return { state: 'unknown' };
+      return { state: 'found', ...readRobots(file.html) };
+    } catch (error) {
+      return { state: missingOrUnknown(error) };
+    }
+  })();
+
+  const sitemap = (async (): Promise<SiteProbes['sitemap']> => {
+    try {
+      const file = await safeFetchPage(`${origin}/sitemap.xml`, { ...guarded, allowedContentTypes: XML_TYPES });
+      if (new URL(file.finalUrl).host !== home.host) return { state: 'unknown' };
+      const locCount = countSitemapLocs(file.html);
+      return locCount > 0 ? { state: 'found', locCount } : { state: 'missing' };
+    } catch (error) {
+      return { state: missingOrUnknown(error) };
+    }
+  })();
+
+  // one extra request: the same host over http://. Where it ends up is the answer.
+  const httpsRedirect = (async (): Promise<SiteProbes['httpsRedirect']> => {
+    if (home.protocol !== 'https:') return 'unknown';
+    try {
+      const plain = await safeFetchPage(`http://${home.host}/`, guarded);
+      return plain.finalUrl.startsWith('https://') ? 'redirects' : 'no_redirect';
+    } catch {
+      return 'unknown';
+    }
+  })();
+
+  // links on the pages read that point at this same host and were not themselves read as pages
+  const read = new Set(pages.map((page) => page.url.replace(/\/$/, '')));
+  const candidates: string[] = [];
+  for (const page of pages) {
+    for (const { href } of page.facts.ownLinks) {
+      if (candidates.length >= MAX_LINK_CHECKS) break;
+      if (read.has(href.replace(/\/$/, '')) || candidates.includes(href)) continue;
+      candidates.push(href);
+    }
+  }
+  const links: SiteProbes['links'] = { checked: 0, broken: [] };
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < candidates.length && !deadline.aborted) {
+      const url = candidates[cursor++];
+      try {
+        const { status, leftHost } = await safeCheckLink(url, home.host, guarded);
+        // a link that leads to another host was not checked there, so it is not counted as checked at all
+        if (leftHost) continue;
+        links.checked += 1;
+        if (status >= 400 && status <= 599) links.broken.push({ url, status });
+      } catch {
+        // no answer (a timeout, a refusal): nothing is claimed about this link
+      }
+    }
+  };
+  // the three questions first, then the links: never more than a few requests to the site at once
+  await Promise.all([robots, sitemap, httpsRedirect]);
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, candidates.length)) }, worker));
+
+  return { robots: await robots, sitemap: await sitemap, httpsRedirect: await httpsRedirect, links };
 }
 
 // Keeps the total text sent to the model under TOTAL_TEXT_CAP. Later pages are cut first, visibly.
@@ -146,6 +279,21 @@ export function extractPage(html: string, url: string): FetchedPage {
     hasPrivacyLink:
       $('a[href]').filter((_, el) => /privacy/i.test($(el).attr('href') || '') || /privacy/i.test($(el).text())).length > 0,
     formCount: $('form').length,
+    robotsMeta: ($('meta[name="robots" i]').attr('content') || '').toLowerCase().trim(),
+    ogTitle: squash($('meta[property="og:title" i]').attr('content') || ''),
+    ogImage: squash($('meta[property="og:image" i]').attr('content') || ''),
+    ogSiteName: squash($('meta[property="og:site_name" i]').attr('content') || ''),
+    ...readStructuredData($),
+    phoneLink: firstLink($, 'a[href^="tel:" i]'),
+    emailLink: firstLink($, 'a[href^="mailto:" i]'),
+    firstLinks: $('a[href]')
+      .slice(0, FIRST_LINKS)
+      .map((_, el) => ({ text: squash($(el).text()), href: absolute($(el).attr('href') || '', url) }))
+      .get(),
+    ownLinks: ownLinks($, url),
+    forms: $('form')
+      .map((_, form) => squash($(form).find('label, button, legend, h2, h3, p, option').map((__, el) => `${$(el).text()} `).get().join(' ')).slice(0, 300))
+      .get(),
   };
 
   // not content: removed before any text is read
@@ -213,6 +361,70 @@ export function extractPage(html: string, url: string): FetchedPage {
   });
 
   return cutPage({ url, title: title || 'Untitled', text: full, truncated: false, facts, segments }, PAGE_TEXT_CAP);
+}
+
+// how many of a page's links count as "the first links": roughly what sits in the header and the first screen
+const FIRST_LINKS = 15;
+
+function absolute(href: string, base: string): string {
+  try {
+    return new URL(href, base).href;
+  } catch {
+    return href;
+  }
+}
+
+function firstLink($: cheerio.CheerioAPI, selector: string): PageLink | null {
+  const el = $(selector).first();
+  if (!el.length) return null;
+  return { text: squash(el.text()), href: (el.attr('href') || '').trim() };
+}
+
+// Links to the page's own host, absolute and without fragment, each passing rule 1 of the guard.
+function ownLinks($: cheerio.CheerioAPI, pageUrl: string): PageLink[] {
+  const host = new URL(pageUrl).host;
+  const found = new Map<string, PageLink>();
+  $('a[href]').each((_, el) => {
+    const href = ($(el).attr('href') || '').trim();
+    if (!href || href.startsWith('#')) return;
+    try {
+      const link = checkUrl(new URL(href, pageUrl));
+      if (link.host !== host) return;
+      link.hash = '';
+      if (!found.has(link.href)) found.set(link.href, { text: squash($(el).text()), href: link.href });
+    } catch {
+      // not a link the audit may request
+    }
+  });
+  return [...found.values()];
+}
+
+// schema.org types that are a LocalBusiness or one of its kinds
+const LOCAL_BUSINESS_TYPE = /(LocalBusiness|Business|Store|Restaurant|Dentist|Physician|Plumber|Electrician|Locksmith|RoofingContractor|GeneralContractor|HousePainter|MovingCompany|ProfessionalService|LegalService|HomeHealthCare|MedicalClinic|Pharmacy|AutoRepair|ChildCare|Hotel|RealEstateAgent|TravelAgency)$/;
+
+// Reads the page's JSON-LD blocks. A block that is not valid JSON is ignored.
+function readStructuredData($: cheerio.CheerioAPI): { hasLocalBusinessSchema: boolean; schemaName: string } {
+  let hasLocalBusinessSchema = false;
+  let schemaName = '';
+  const visit = (node: unknown, depth: number) => {
+    if (depth > 6 || node === null || typeof node !== 'object') return;
+    if (Array.isArray(node)) return node.forEach((item) => visit(item, depth + 1));
+    const record = node as Record<string, unknown>;
+    const types = ([] as unknown[]).concat(record['@type'] ?? []).filter((t): t is string => typeof t === 'string');
+    if (types.some((type) => LOCAL_BUSINESS_TYPE.test(type))) {
+      hasLocalBusinessSchema = true;
+      if (!schemaName && typeof record.name === 'string') schemaName = squash(record.name).slice(0, 120);
+    }
+    visit(record['@graph'], depth + 1);
+  };
+  $('script[type="application/ld+json" i]').each((_, el) => {
+    try {
+      visit(JSON.parse($(el).text()), 0);
+    } catch {
+      // not JSON
+    }
+  });
+  return { hasLocalBusinessSchema, schemaName };
 }
 
 // (?:^|;) keeps max-height:0 and line-height:0 out of it: those do not hide text by themselves

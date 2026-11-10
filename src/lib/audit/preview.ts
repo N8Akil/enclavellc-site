@@ -4,12 +4,15 @@
 // FAIL CLOSED: an unset or empty list means nobody gets the automated report.
 import { escapeHtml } from '@/lib/email/escape';
 import { getResendClient } from '@/lib/email/resend-client';
+import type { Niche } from './config';
 import { auditSetting } from './env';
+import { nicheWords } from './notify';
 
 export const PREVIEW_MESSAGE =
   "Thanks. We're rebuilding the free audit this week, so Nate will run yours by hand and email it to you himself.";
 export const PREVIEW_LEAD_LINE = 'Audit requested while the free audit is in preview: run it by hand.';
 export const CEILING_LEAD_LINE = "Audit requested after today's audit limit was reached: run it by hand.";
+export const QUEUE_LEAD_LINE = 'Audit requested while as many audits as this server runs at once were already under way: run it by hand.';
 
 export function isPreviewEmail(email: string, list: string | undefined = auditSetting('AUDIT_PREVIEW_EMAILS')): boolean {
   try {
@@ -31,6 +34,7 @@ export async function sendPreviewLead(lead: {
   userEmail: string;
   userName?: string;
   websiteUrl: string;
+  niche?: Niche;
   adminEmail: string;
   // why this is a lead and not a report; one of the fixed lines above
   line?: string;
@@ -48,6 +52,7 @@ export async function sendPreviewLead(lead: {
   <p><strong>Website:</strong> ${site}</p>
   <p><strong>Email:</strong> ${email}</p>
   <p><strong>Name:</strong> ${name}</p>
+  <p><strong>Audit written for:</strong> ${escapeHtml(nicheWords(lead.niche ?? 'general'))}</p>
 </body>
 </html>`.trim();
 

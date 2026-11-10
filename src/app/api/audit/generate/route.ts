@@ -1,13 +1,21 @@
 // src/app/api/audit/generate/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { fetchWebsiteContent, validateUrl } from '@/lib/audit/fetch-website';
-import { runAudit } from '@/lib/audit/run-audit';
+import { scheduleAfterResponse } from '@/lib/audit/background';
+import { NICHES } from '@/lib/audit/config';
+import { validateUrl } from '@/lib/audit/fetch-website';
 import { auditLimiter, CEILING_LEAD_MESSAGE, clientIp, RATE_LIMIT_MESSAGES } from '@/lib/audit/limits';
-import { CEILING_LEAD_LINE, isPreviewEmail, PREVIEW_LEAD_LINE, PREVIEW_MESSAGE, sendPreviewLead } from '@/lib/audit/preview';
-import { generateAuditDocument } from '@/lib/audit/generate-document';
-import { sendAuditEmails } from '@/lib/audit/send-emails';
-import type { AuditResults } from '@/lib/audit/types';
+import { ACCEPT_MESSAGE, sendAcceptMail } from '@/lib/audit/notify';
+import { runAuditJob } from '@/lib/audit/pipeline';
+import {
+  CEILING_LEAD_LINE,
+  isPreviewEmail,
+  PREVIEW_LEAD_LINE,
+  PREVIEW_MESSAGE,
+  QUEUE_LEAD_LINE,
+  sendPreviewLead,
+} from '@/lib/audit/preview';
+import { auditQueue } from '@/lib/audit/queue';
 
 // Input validation schema
 const auditRequestSchema = z.object({
@@ -15,9 +23,19 @@ const auditRequestSchema = z.object({
   userEmail: z.string().email('Valid email is required'),
   userName: z.string().optional(),
   businessType: z.string().optional(),
-  priorityAreas: z.array(z.string()).optional(),
+  // who the audit is written for; left out means "general", anything else is refused
+  niche: z.enum(NICHES, { message: 'Unknown audit type' }).default('general'),
 });
 
+const CONFIG_ERROR_MESSAGE = 'Service temporarily unavailable. Please contact n.garrett@enclavellc.net or try again later.';
+const NOT_PASSED_ON_MESSAGE = 'We could not pass your request on. Please contact n.garrett@enclavellc.net.';
+
+// The order, which is the point of this file:
+//   validate the body -> URL rules -> limits (counted) -> preview gate -> ACCEPT.
+// At accept, before any work: one "audit requested" mail to the admin, then the visitor is answered at once (202).
+// The audit itself (pages, model, document, mails) runs after the response, in this same process, at most two at a
+// time. Stated limit: a restart loses audits in flight; the visitor then hears nothing more, but the admin already
+// has the lead from the accept mail.
 export async function POST(request: NextRequest) {
   // failure logs carry this id and a code, never the visitor's details
   const requestId = crypto.randomUUID().slice(0, 8);
@@ -39,7 +57,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { websiteUrl, userEmail, userName, businessType, priorityAreas } = validationResult.data;
+    const { websiteUrl, userEmail, userName, businessType, niche } = validationResult.data;
 
     // Validate URL format
     const urlValidation = validateUrl(websiteUrl);
@@ -55,6 +73,7 @@ export async function POST(request: NextRequest) {
     }
     // from here on only the server's normalised URL is used, and it is never logged
     const siteUrl = urlValidation.url;
+    const adminEmail = process.env.ADMIN_EMAIL || 'n.garrett@enclavellc.net';
 
     // Limits come BEFORE anything that costs: no page is requested and no model is called for a refused
     // request. An allowed attempt is counted here, so a request that fails later still used its turn.
@@ -79,179 +98,83 @@ export async function POST(request: NextRequest) {
         }
       );
     }
+    const retryAfter = !limit.allowed && limit.retryAfterSeconds ? { 'Retry-After': String(limit.retryAfterSeconds) } : undefined;
 
-    // PREVIEW GATE. Unless this address is on the preview list, nothing automated runs: no page is requested,
-    // no model is called, no document is made. The request becomes a lead for a person to run by hand.
-    // An unset or empty list means nobody is on it. This path needs the email key only.
-    // The same happens to a listed address once today's audit ceiling is used up: the visitor's request still
-    // reaches a person. Lead emails have their own daily cap (limits.ts takeLead), so the form cannot flood an inbox.
-    if (!listed || ceilingHit) {
+    const configMissing = (name: string) => {
+      console.error(`[Audit] ${requestId} config missing: ${name}`);
+      return NextResponse.json({ success: false, error: 'CONFIG_ERROR', message: CONFIG_ERROR_MESSAGE, requestId }, { status: 500 });
+    };
+
+    // Why this request will NOT be run automatically, if it will not:
+    //   preview  the address is not on the preview list (an unset or empty list means nobody is)
+    //   ceiling  a listed address, but today's audit ceiling is used up
+    //   queue    a listed address, but as many audits as this process takes on are already running and waiting
+    // In each case nothing automated runs: no page is requested, no model is called, no document is made. The
+    // request becomes a lead for a person to run by hand. That path needs the email key only.
+    let leadReason: 'preview' | 'ceiling' | 'queue' | null = !listed ? 'preview' : ceilingHit ? 'ceiling' : null;
+
+    if (!leadReason) {
+      // a request that will be run needs both keys before it is accepted
+      if (!process.env.ANTHROPIC_API_KEY) return configMissing('ANTHROPIC_API_KEY');
+      if (!process.env.RESEND_API_KEY) return configMissing('RESEND_API_KEY');
+      // a place to run or to wait; none left (or a cluster worker): the request is passed on as a lead
+      if (!auditQueue.reserve()) leadReason = 'queue';
+    }
+
+    if (leadReason) {
+      // lead emails have their own daily cap (limits.ts takeLead), so the form cannot flood an inbox
       if (!auditLimiter.takeLead()) {
         console.warn(`[Audit] ${requestId} rate limited: lead cap`);
         return NextResponse.json(
           { success: false, error: 'RATE_LIMITED', message: RATE_LIMIT_MESSAGES.daily },
-          {
-            status: 429,
-            headers: !limit.allowed && limit.retryAfterSeconds ? { 'Retry-After': String(limit.retryAfterSeconds) } : undefined,
-          }
+          { status: 429, headers: retryAfter }
         );
       }
-      if (!process.env.RESEND_API_KEY) {
-        console.error(`[Audit] ${requestId} config missing: RESEND_API_KEY`);
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'CONFIG_ERROR',
-            message: 'Service temporarily unavailable. Please contact n.garrett@enclavellc.net or try again later.',
-            requestId,
-          },
-          { status: 500 }
-        );
-      }
-      console.log(`[Audit] ${requestId} ${ceilingHit ? 'ceiling' : 'preview'}: sending lead`);
+      if (!process.env.RESEND_API_KEY) return configMissing('RESEND_API_KEY');
+      console.log(`[Audit] ${requestId} ${leadReason}: sending lead`);
       const lead = await sendPreviewLead({
         userEmail,
         userName,
         websiteUrl: siteUrl,
-        line: ceilingHit ? CEILING_LEAD_LINE : PREVIEW_LEAD_LINE,
-        adminEmail: process.env.ADMIN_EMAIL || 'n.garrett@enclavellc.net',
+        niche,
+        line: leadReason === 'ceiling' ? CEILING_LEAD_LINE : leadReason === 'queue' ? QUEUE_LEAD_LINE : PREVIEW_LEAD_LINE,
+        adminEmail,
       });
       if (!lead.sent) {
         // nobody knows the visitor asked: say so, and give them the address
         console.error(`[Audit] ${requestId} preview lead failed: ${lead.error}`);
-        return NextResponse.json(
-          {
-            success: false,
-            error: 'EMAIL_FAILED',
-            message: 'We could not pass your request on. Please contact n.garrett@enclavellc.net.',
-            requestId,
-          },
-          { status: 502 }
-        );
+        return NextResponse.json({ success: false, error: 'EMAIL_FAILED', message: NOT_PASSED_ON_MESSAGE, requestId }, { status: 502 });
       }
-      if (ceilingHit) {
+      if (leadReason === 'ceiling') {
         // not run today, and the visitor is told so; the lead is with a person, so they need do nothing more
         console.warn(`[Audit] ${requestId} rate limited: daily (lead passed on)`);
         return NextResponse.json(
           { success: false, error: 'RATE_LIMITED', leadSent: true, message: CEILING_LEAD_MESSAGE },
-          {
-            status: 429,
-            headers: !limit.allowed && limit.retryAfterSeconds ? { 'Retry-After': String(limit.retryAfterSeconds) } : undefined,
-          }
+          { status: 429, headers: retryAfter }
         );
       }
       return NextResponse.json({ success: true, preview: true, message: PREVIEW_MESSAGE }, { status: 202 });
     }
 
-    // Check for required environment variables
-    if (!process.env.ANTHROPIC_API_KEY) {
-      console.error(`[Audit] ${requestId} config missing: ANTHROPIC_API_KEY`);
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'CONFIG_ERROR',
-          message: 'Service temporarily unavailable. Please contact n.garrett@enclavellc.net or try again later.',
-          requestId,
-        },
-        { status: 500 }
-      );
+    // ACCEPT. First the admin is told who asked: after this point the audit lives only in this process's memory,
+    // and if it is lost the lead must not be. If that mail cannot be sent the request is NOT accepted, because
+    // then nobody would know the visitor asked.
+    const lead = { userEmail, userName, websiteUrl: siteUrl, niche, adminEmail };
+    const told = await sendAcceptMail(lead);
+    if (!told.sent) {
+      auditQueue.release();
+      console.error(`[Audit] ${requestId} accept mail failed: ${told.error}`);
+      return NextResponse.json({ success: false, error: 'EMAIL_FAILED', message: NOT_PASSED_ON_MESSAGE, requestId }, { status: 502 });
     }
 
-    if (!process.env.RESEND_API_KEY) {
-      console.error(`[Audit] ${requestId} config missing: RESEND_API_KEY`);
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'CONFIG_ERROR',
-          message: 'Service temporarily unavailable. Please contact n.garrett@enclavellc.net or try again later.',
-          requestId,
-        },
-        { status: 500 }
-      );
-    }
-
-    // Step 1: Fetch website content
-    console.log(`[Audit] ${requestId} fetching site`);
-    let websiteContent;
-    try {
-      websiteContent = await fetchWebsiteContent(siteUrl);
-    } catch (fetchError) {
-      // An unreachable site and a refused address get the SAME answer: the caller is not told why an
-      // address was refused, and it is not echoed. The log line carries the guard's code only.
-      console.error(`[Audit] ${requestId} fetch failed: ${errorCode(fetchError)}`);
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'FETCH_FAILED',
-          message: 'Unable to access the website. Please verify the URL is correct and the site is publicly accessible.',
-        },
-        { status: 400 }
-      );
-    }
-
-    // Step 2: Run AI audit
-    console.log(`[Audit] ${requestId} running analysis`);
-    const auditResult = await runAudit(
-      websiteContent,
-      siteUrl,
-      { businessType, priorityAreas },
-      { requestId }
-    );
-
-    if (!auditResult.success) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'AUDIT_FAILED',
-          message: 'Failed to generate audit analysis. Please try again.',
-        },
-        { status: 500 }
-      );
-    }
-
-    // Step 3: Generate document
-    console.log(`[Audit] ${requestId} generating document`);
-    const document = await generateAuditDocument(auditResult as AuditResults, { userName });
-
-    // Step 4: Send emails
-    console.log(`[Audit] ${requestId} sending emails`);
-    const adminEmail = process.env.ADMIN_EMAIL || 'n.garrett@enclavellc.net';
-
-    const emailResult = await sendAuditEmails({
-      document,
-      userEmail,
-      userName,
-      adminEmail,
-      websiteUrl: siteUrl,
-      auditResults: auditResult as AuditResults,
+    // The work, after the response. runAuditJob never throws; the queue gives the place back whatever happens.
+    console.log(`[Audit] ${requestId} accepted`);
+    scheduleAfterResponse(async () => {
+      await auditQueue.run(() => runAuditJob({ ...lead, requestId, businessType }));
     });
 
-    if (!emailResult.success) {
-      // log only codes and the request id
-      console.error(`[Audit] ${requestId} email failed: ${emailResult.error}`);
-    }
-
-    if (!emailResult.userSent) {
-      // the audit ran but did not reach the visitor: say so
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'EMAIL_FAILED',
-          message: 'Your audit ran but we could not email it. Please contact n.garrett@enclavellc.net.',
-          requestId,
-        },
-        { status: 502 }
-      );
-    }
-
-    console.log(`[Audit] ${requestId} completed`);
-
-    return NextResponse.json({
-      success: true,
-      message: `Your audit has been emailed to ${userEmail}. Check your inbox in 2-3 minutes.`,
-      estimatedTime: '2-3 minutes',
-    });
-
+    // answered at once, with no time promised
+    return NextResponse.json({ success: true, accepted: true, message: ACCEPT_MESSAGE }, { status: 202 });
   } catch (error) {
     console.error(`[Audit] ${requestId} error: ${errorCode(error)}`);
     return NextResponse.json(
@@ -278,6 +201,6 @@ export async function GET() {
   return NextResponse.json({
     status: 'ok',
     service: 'Website Audit API',
-    version: '2.0.0',
+    version: '3.0.0',
   });
 }

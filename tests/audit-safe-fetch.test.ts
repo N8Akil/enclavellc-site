@@ -4,6 +4,10 @@ import {
   UnsafeUrlError,
   checkUrl,
   isPublicAddress,
+  PLAIN_TEXT_TYPES,
+  READABLE_TYPES,
+  XML_TYPES,
+  safeCheckLink,
   safeFetchPage,
   type ResolvedAddress,
   type Transport,
@@ -18,7 +22,7 @@ const PUBLIC_2 = '151.101.1.69'
 const PRIVATE = '192.168.1.49'
 const HTML = { 'content-type': 'text/html; charset=utf-8' }
 
-type Route = Partial<Omit<TransportResponse, 'body'>> & { body?: string | Uint8Array[]; hang?: boolean; throws?: Error }
+type Route = Partial<Omit<TransportResponse, 'body'>> & { body?: string | Uint8Array[]; hang?: boolean; throws?: Error; head?: number }
 
 function harness(routes: Record<string, Route> = {}, dns: Record<string, ResolvedAddress[]> = {}) {
   const calls: TransportRequest[] = []
@@ -31,7 +35,7 @@ function harness(routes: Record<string, Route> = {}, dns: Record<string, Resolve
     if (route.hang) return new Promise<TransportResponse>(() => {})
     const chunks = typeof route.body === 'string' ? [new TextEncoder().encode(route.body)] : route.body ?? []
     return {
-      status: route.status ?? 200,
+      status: request.method === 'HEAD' && route.head !== undefined ? route.head : route.status ?? 200,
       headers: route.headers ?? HTML,
       body: (async function* () {
         for (const chunk of chunks) {
@@ -485,3 +489,205 @@ describe('safeFetchPage', () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------------------------------------------
+// The per-call content types (robots.txt, sitemap.xml) and the link check. Both are the same guard: the tests
+// below show the default is unchanged and that neither can be used to get around rules 1-3.
+// ---------------------------------------------------------------------------------------------------------------
+
+describe('allowedContentTypes: a per-call choice among plain text formats', () => {
+  const served = (type: string): Record<string, Route> => ({ 'https://example.com/file': { headers: { 'content-type': type }, body: 'the body' } })
+  const dns = { 'example.com': [v4(PUBLIC)] }
+
+  it('the default is unchanged: HTML only', async () => {
+    for (const type of ['text/html', 'application/xhtml+xml']) {
+      await expect(safeFetchPage('https://example.com/file', harness(served(type), dns).options)).resolves.toMatchObject({ html: 'the body' })
+    }
+    for (const type of ['text/plain', 'application/xml', 'text/xml', 'application/json', 'application/pdf', 'image/png']) {
+      expect((await refusal(safeFetchPage('https://example.com/file', harness(served(type), dns).options))).code).toBe('BAD_CONTENT_TYPE')
+    }
+    // leaving the option undefined is the default too
+    expect((await refusal(safeFetchPage('https://example.com/file', { ...harness(served('text/plain'), dns).options, allowedContentTypes: undefined }))).code).toBe('BAD_CONTENT_TYPE')
+  })
+
+  it('the option REPLACES the list for that one call: text/plain for robots.txt, the XML types for a sitemap', async () => {
+    expect(PLAIN_TEXT_TYPES).toEqual(['text/plain'])
+    expect(XML_TYPES).toEqual(['application/xml', 'text/xml'])
+    const plain = { allowedContentTypes: PLAIN_TEXT_TYPES }
+    const xml = { allowedContentTypes: XML_TYPES }
+    await expect(safeFetchPage('https://example.com/file', { ...harness(served('text/plain; charset=utf-8'), dns).options, ...plain })).resolves.toMatchObject({ html: 'the body' })
+    await expect(safeFetchPage('https://example.com/file', { ...harness(served('application/xml'), dns).options, ...xml })).resolves.toMatchObject({ html: 'the body' })
+    await expect(safeFetchPage('https://example.com/file', { ...harness(served('TEXT/XML; charset=UTF-8'), dns).options, ...xml })).resolves.toMatchObject({ html: 'the body' })
+    // a call that asked for text/plain does not also get HTML, and the next call without the option is HTML-only again
+    expect((await refusal(safeFetchPage('https://example.com/file', { ...harness(served('text/html'), dns).options, ...plain }))).code).toBe('BAD_CONTENT_TYPE')
+    expect((await refusal(safeFetchPage('https://example.com/file', { ...harness(served('text/plain'), dns).options, ...xml }))).code).toBe('BAD_CONTENT_TYPE')
+    expect((await refusal(safeFetchPage('https://example.com/file', harness(served('text/plain'), dns).options))).code).toBe('BAD_CONTENT_TYPE')
+  })
+
+  it.each([
+    ['a pdf', ['application/pdf']],
+    ['an image', ['image/png']],
+    ['anything', ['*/*']],
+    ['a wildcard subtype', ['text/*']],
+    ['json', ['application/json']],
+    ['javascript', ['text/javascript']],
+    ['a readable type with one that is not', ['text/plain', 'application/octet-stream']],
+    ['an empty list', []],
+    ['an empty string', ['']],
+  ])('the option cannot be widened to %s: refused before anything is resolved or requested', async (_, types) => {
+    expect(READABLE_TYPES).toEqual(['text/html', 'application/xhtml+xml', 'text/plain', 'application/xml', 'text/xml'])
+    const h = harness(served(types[0] || 'text/html'), dns)
+    expect((await refusal(safeFetchPage('https://example.com/file', { ...h.options, allowedContentTypes: types }))).code).toBe('BAD_CONTENT_TYPE')
+    expect(h.calls).toHaveLength(0)
+    expect(h.resolver).not.toHaveBeenCalled()
+  })
+
+  describe('with the option set, rules 1-3 are exactly as before', () => {
+    const option = { allowedContentTypes: [...PLAIN_TEXT_TYPES, ...XML_TYPES] }
+    it.each([
+      ['loopback 127.0.0.1', 'http://127.0.0.1/robots.txt', 'BLOCKED_ADDRESS'],
+      ['IPv6 loopback', 'http://[::1]/robots.txt', 'BLOCKED_ADDRESS'],
+      ['a 10/8 address', 'http://10.1.2.3/sitemap.xml', 'BLOCKED_ADDRESS'],
+      ['the cloud metadata address', 'http://169.254.169.254/latest/meta-data/', 'BLOCKED_ADDRESS'],
+      ['an IPv4-mapped IPv6 literal of a private address', 'http://[::ffff:10.0.0.1]/robots.txt', 'BLOCKED_ADDRESS'],
+      ['a decimal-encoded IPv4 host', 'http://2130706433/robots.txt', 'BLOCKED_ADDRESS'],
+      ['a non-80/443 port', 'http://example.com:8080/robots.txt', 'BLOCKED_PORT'],
+      ['a URL with credentials', 'http://user:pass@example.com/robots.txt', 'HAS_CREDENTIALS'],
+      ['a non-http scheme', 'file:///etc/hosts', 'BLOCKED_SCHEME'],
+    ])('%s is refused with no connection', async (_, url, code) => {
+      const h = harness({}, dns)
+      expect((await refusal(safeFetchPage(url, { ...h.options, ...option }))).code).toBe(code)
+      expect(h.calls).toHaveLength(0)
+      expect(h.resolver).not.toHaveBeenCalled()
+    })
+
+    it('a hostname with one private answer, a redirect to a private address, and a rebind are refused as before; the pin holds', async () => {
+      const mixed = harness({}, { 'mixed.example.com': [v4(PUBLIC), v4(PRIVATE)] })
+      expect((await refusal(safeFetchPage('https://mixed.example.com/robots.txt', { ...mixed.options, ...option }))).code).toBe('BLOCKED_ADDRESS')
+      expect(mixed.calls).toHaveLength(0)
+
+      const redirect = harness({ 'https://example.com/robots.txt': { status: 302, headers: { location: `http://${PRIVATE}/secret.txt` } } }, dns)
+      expect((await refusal(safeFetchPage('https://example.com/robots.txt', { ...redirect.options, ...option }))).code).toBe('BLOCKED_ADDRESS')
+      expect(redirect.calls.map((c) => c.address)).toEqual([PUBLIC])
+
+      const rebind = harness({ 'https://rebind.example.com/robots.txt': { headers: { 'content-type': 'text/plain' }, body: 'User-agent: *' } })
+      rebind.resolver.mockResolvedValueOnce([v4(PUBLIC)]).mockResolvedValue([v4('127.0.0.1')])
+      await safeFetchPage('https://rebind.example.com/robots.txt', { ...rebind.options, ...option })
+      expect(rebind.resolver).toHaveBeenCalledTimes(1)
+      expect(rebind.calls.map((c) => c.address)).toEqual([PUBLIC])
+    })
+
+    it('the size cap and the time limit apply to these files as to a page', async () => {
+      vi.useFakeTimers()
+      const megabyte = new Uint8Array(1024 * 1024)
+      const big = harness({ 'https://example.com/sitemap.xml': { headers: { 'content-type': 'application/xml' }, body: [megabyte, megabyte, megabyte] } }, dns)
+      expect((await refusal(safeFetchPage('https://example.com/sitemap.xml', { ...big.options, ...option }))).code).toBe('TOO_LARGE')
+      const slow = harness({ 'https://example.com/robots.txt': { hang: true } }, dns)
+      const outcome = refusal(safeFetchPage('https://example.com/robots.txt', { ...slow.options, ...option }))
+      await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS)
+      expect((await outcome).code).toBe('TIMEOUT')
+    })
+  })
+})
+
+describe('safeCheckLink: one link on the site\'s own host, status only', () => {
+  const HOST = 'example.com'
+  const dns = { 'example.com': [v4(PUBLIC)], 'other.example.org': [v4(PUBLIC_2)], 'inside.example.com': [v4(PRIVATE)] }
+
+  it.each([200, 204, 403, 404, 410, 500, 503])('reports a %i as it is, with HEAD, without reading any body', async (status) => {
+    const h = harness({ 'https://example.com/a': { status, body: 'BODY' } }, dns)
+    await expect(safeCheckLink('https://example.com/a', HOST, h.options)).resolves.toEqual({ status, leftHost: false })
+    expect(h.calls.map((c) => c.method)).toEqual(['HEAD'])
+    expect(h.calls[0].address).toBe(PUBLIC)
+    expect(h.chunksServed()).toBe(0)
+  })
+
+  it.each([405, 501])('a server that refuses HEAD with %i is asked once more with GET, and still no body is read', async (head) => {
+    const h = harness({ 'https://example.com/a': { head, status: 404, headers: { 'content-type': 'application/pdf' }, body: [new Uint8Array(10), new Uint8Array(10)] } }, dns)
+    await expect(safeCheckLink('https://example.com/a', HOST, h.options)).resolves.toEqual({ status: 404, leftHost: false })
+    expect(h.calls.map((c) => c.method)).toEqual(['HEAD', 'GET'])
+    // each of the two requests resolved the name and was vetted on its own
+    expect(h.resolver).toHaveBeenCalledTimes(2)
+    expect(h.chunksServed()).toBe(0)
+  })
+
+  it('any content type is fine: nothing is read, so there is nothing to refuse', async () => {
+    const h = harness({ 'https://example.com/a.pdf': { headers: { 'content-type': 'application/pdf' }, body: 'PDF' } }, dns)
+    await expect(safeCheckLink('https://example.com/a.pdf', HOST, h.options)).resolves.toEqual({ status: 200, leftHost: false })
+    expect(h.chunksServed()).toBe(0)
+  })
+
+  it('a redirect that stays on the host is followed, and each hop is vetted again', async () => {
+    const h = harness({ 'https://example.com/old': { status: 301, headers: { location: '/new' } }, 'https://example.com/new': { status: 404 } }, dns)
+    await expect(safeCheckLink('https://example.com/old', HOST, h.options)).resolves.toEqual({ status: 404, leftHost: false })
+    expect(h.calls.map((c) => `${c.method} ${c.url.pathname} ${c.address}`)).toEqual([`HEAD /old ${PUBLIC}`, `HEAD /new ${PUBLIC}`])
+    expect(h.resolver).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['another site', 'https://other.example.org/landing'],
+    ['a subdomain', 'https://www.example.com/landing'],
+    ['a private address', `http://${PRIVATE}/admin`],
+    ['the metadata address', 'http://169.254.169.254/latest/'],
+  ])('a redirect to %s is reported and NOT followed: that host is never asked', async (_, location) => {
+    const h = harness({ 'https://example.com/out': { status: 302, headers: { location } } }, { ...dns, 'www.example.com': [v4(PUBLIC_2)] })
+    await expect(safeCheckLink('https://example.com/out', HOST, h.options)).resolves.toEqual({ status: 302, leftHost: true })
+    expect(h.calls.map((c) => c.url.href)).toEqual(['https://example.com/out'])
+    expect(h.resolver).toHaveBeenCalledTimes(1)
+  })
+
+  it('a redirect to the same host on the other scheme is still the same host: followed, and vetted again', async () => {
+    const h = harness({ 'https://example.com/out': { status: 302, headers: { location: 'http://example.com/plain' } }, 'http://example.com/plain': { status: 200 } }, dns)
+    await expect(safeCheckLink('https://example.com/out', HOST, h.options)).resolves.toEqual({ status: 200, leftHost: false })
+    expect(h.calls.map((c) => c.url.href)).toEqual(['https://example.com/out', 'http://example.com/plain'])
+    expect(h.resolver).toHaveBeenCalledTimes(2)
+  })
+
+  it('a redirect to a URL that breaks rule 1 is refused, even though it would not have been followed', async () => {
+    for (const [location, code] of [['https://other.example.org:8443/x', 'BLOCKED_PORT'], ['https://u:p@other.example.org/x', 'HAS_CREDENTIALS'], ['ftp://other.example.org/x', 'BLOCKED_SCHEME']] as const) {
+      const h = harness({ 'https://example.com/out': { status: 302, headers: { location } } }, dns)
+      expect((await refusal(safeCheckLink('https://example.com/out', HOST, h.options))).code).toBe(code)
+      expect(h.calls).toHaveLength(1)
+    }
+  })
+
+  it.each([
+    ['a link on another host', 'https://other.example.org/x', 'BLOCKED_ADDRESS'],
+    ['a link on a subdomain', 'https://www.example.com/x', 'BLOCKED_ADDRESS'],
+    ['an odd port', 'https://example.com:8443/x', 'BLOCKED_PORT'],
+    ['credentials', 'https://u:p@example.com/x', 'HAS_CREDENTIALS'],
+    ['another scheme', 'ftp://example.com/x', 'BLOCKED_SCHEME'],
+  ])('%s is never requested at all', async (_, url, code) => {
+    const h = harness({}, { ...dns, 'www.example.com': [v4(PUBLIC_2)] })
+    expect((await refusal(safeCheckLink(url, HOST, h.options))).code).toBe(code)
+    expect(h.calls).toHaveLength(0)
+    expect(h.resolver).not.toHaveBeenCalled()
+  })
+
+  it('rules 2 and 3 hold for a link check: a host that resolves privately, a mixed answer and a rebind on the second request are refused', async () => {
+    const inside = harness({}, dns)
+    expect((await refusal(safeCheckLink('https://inside.example.com/x', 'inside.example.com', inside.options))).code).toBe('BLOCKED_ADDRESS')
+    expect(inside.calls).toHaveLength(0)
+
+    const mixed = harness({}, { 'example.com': [v4(PUBLIC), v4('10.0.0.9')] })
+    expect((await refusal(safeCheckLink('https://example.com/x', HOST, mixed.options))).code).toBe('BLOCKED_ADDRESS')
+    expect(mixed.calls).toHaveLength(0)
+
+    // HEAD is answered 405 from the public address; the name then resolves privately for the GET: refused
+    const rebind = harness({ 'https://example.com/x': { head: 405, status: 200 } })
+    rebind.resolver.mockResolvedValueOnce([v4(PUBLIC)]).mockResolvedValue([v4('127.0.0.1')])
+    expect((await refusal(safeCheckLink('https://example.com/x', HOST, rebind.options))).code).toBe('BLOCKED_ADDRESS')
+    expect(rebind.calls.map((c) => `${c.method} ${c.address}`)).toEqual([`HEAD ${PUBLIC}`])
+  })
+
+  it('times out like any request, and says nothing about the host when it fails', async () => {
+    vi.useFakeTimers()
+    const h = harness({ 'https://example.com/slow': { hang: true } }, dns)
+    const outcome = refusal(safeCheckLink('https://example.com/slow', HOST, h.options))
+    await vi.advanceTimersByTimeAsync(FETCH_TIMEOUT_MS)
+    const error = await outcome
+    expect(error.code).toBe('TIMEOUT')
+    expect(`${error.message} ${String(error)}`).not.toMatch(/example|93\.184/)
+  })
+})
+

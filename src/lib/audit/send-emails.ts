@@ -1,7 +1,7 @@
 // src/lib/audit/send-emails.ts
 import { escapeHtml } from '@/lib/email/escape';
 import { getResendClient } from '@/lib/email/resend-client';
-import { HOW_MADE_HEADING, areasReadPhrase, assessedCategories, evidenceLine, howMadeText, scoreLine } from './present';
+import { HOW_MADE_HEADING, areasAssessedPhrase, assessedAreas, evidenceLine, howMadeText, scoreLine } from './present';
 import type { AuditResults } from './types';
 
 interface SendEmailsOptions {
@@ -82,17 +82,19 @@ function generateUserEmailHtml(
 ): string {
   // everything below comes from the visitor or from their site: escape it
   // (model text and quotes from the site are untrusted: nothing reaches the HTML unescaped)
-  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i =>
-    `${escapeHtml(i.title)}<br><span style="color: #666666; font-size: 13px;">${escapeHtml(evidenceLine(i.evidence))}</span>`
+  const evidence = (line: string) => `<br><span style="color: #666666; font-size: 13px;">${escapeHtml(line)}</span>`;
+  // the fixes, each with what was seen and what that rests on
+  const topFindings = auditResults.fixes.map(f =>
+    `<strong>${escapeHtml(f.headline)}</strong><br>${escapeHtml(f.whatWeSaw)}${evidence(evidenceLine(f.evidence))}`
   );
   // every area, with a score only where one was assessed
-  const areaRows = auditResults.categories.map(c =>
-    c.assessed
-      ? `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.score)} of 10</li>`
-      : `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.reason)}</li>`
+  const areaRows = auditResults.areas.map(a =>
+    a.assessed
+      ? `<li><strong>${escapeHtml(a.name)}:</strong> ${escapeHtml(a.score)} of 10. ${escapeHtml(a.line)}</li>`
+      : `<li><strong>${escapeHtml(a.name)}:</strong> ${escapeHtml(a.reason)}</li>`
   );
-  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s =>
-    `${escapeHtml(s.title)}<br><span style="color: #666666; font-size: 13px;">${escapeHtml(evidenceLine(s.evidence))}</span>`
+  const topStrengths = auditResults.working.map(w =>
+    `<strong>${escapeHtml(w.title)}:</strong> ${escapeHtml(w.line)}${evidence(evidenceLine(w.evidence))}`
   );
   const name = escapeHtml(userName || 'there');
   const site = escapeHtml(websiteUrl);
@@ -137,16 +139,19 @@ function generateUserEmailHtml(
               <p style="color: #333333; font-size: 16px; line-height: 1.6;">
                 Great news! Your free website audit for <strong>${site}</strong> is complete.
               </p>
+              <p style="color: #333333; font-size: 16px; line-height: 1.6;">
+                ${escapeHtml(auditResults.whereYouStand)}
+              </p>
 
               ${topStrengths.length > 0 ? `
-              <h3 style="color: #27AE60; margin-top: 25px;">✓ Top Strengths</h3>
+              <h3 style="color: #27AE60; margin-top: 25px;">✓ What Is Working</h3>
               <ul style="color: #333333; font-size: 14px; line-height: 1.8;">
                 ${topStrengths.map(s => `<li>${s}</li>`).join('')}
               </ul>
               ` : ''}
 
               ${topFindings.length > 0 ? `
-              <h3 style="color: #C0392B; margin-top: 25px;">⚠ Priority Issues</h3>
+              <h3 style="color: #C0392B; margin-top: 25px;">⚠ The Fixes That Matter Most</h3>
               <ul style="color: #333333; font-size: 14px; line-height: 1.8;">
                 ${topFindings.map(f => `<li>${f}</li>`).join('')}
               </ul>
@@ -158,7 +163,7 @@ function generateUserEmailHtml(
               </ul>
 
               <p style="color: #333333; font-size: 16px; line-height: 1.6; margin-top: 25px;">
-                Your full audit report is attached to this email. It covers ${escapeHtml(areasReadPhrase(auditResults))}, with the evidence behind each finding, specific recommendations, and a prioritized action plan.
+                Your full audit report is attached to this email. It covers ${escapeHtml(areasAssessedPhrase(auditResults))}, and says what each finding rests on.
               </p>
 
               <p style="color: #666666; font-size: 13px; line-height: 1.6; margin-top: 25px;">
@@ -204,11 +209,11 @@ function generateAdminEmailHtml(
   websiteUrl: string,
   auditResults: AuditResults
 ): string {
-  const { categories, overallScore, criticalIssues } = auditResults;
+  const { areas, overallScore, fixes } = auditResults;
 
-  // Find highest and lowest scoring categories, among the areas that were assessed
-  const sortedCategories = assessedCategories(auditResults).sort((a, b) => b.score - a.score);
-  const notAssessed = categories.filter(c => !c.assessed).map(c => c.name);
+  // Find highest and lowest scoring areas, among those that were assessed
+  const sortedCategories = assessedAreas(auditResults).sort((a, b) => b.score - a.score);
+  const notAssessed = areas.filter(a => !a.assessed).map(a => a.name);
   const highest = sortedCategories[0];
   const lowest = sortedCategories[sortedCategories.length - 1];
 
@@ -272,8 +277,9 @@ function generateAdminEmailHtml(
         <ul style="color: #333333; font-size: 14px; line-height: 1.8; padding-left: 20px;">
           <li><strong>Highest Score:</strong> ${escapeHtml(highest?.name || 'N/A')} (${escapeHtml(highest?.score || 'N/A')})</li>
           <li><strong>Lowest Score:</strong> ${escapeHtml(lowest?.name || 'N/A')} (${escapeHtml(lowest?.score || 'N/A')})</li>
-          <li><strong>Critical Issues:</strong> ${criticalIssues.length}</li>
-          <li><strong>Score covers:</strong> ${escapeHtml(areasReadPhrase(auditResults))}</li>
+          <li><strong>Audit written for:</strong> ${escapeHtml(auditResults.niche === 'home_care' ? 'a home care agency' : 'a general small business')}</li>
+          <li><strong>Fixes listed:</strong> ${fixes.length}</li>
+          <li><strong>Score covers:</strong> ${escapeHtml(areasAssessedPhrase(auditResults))}</li>
           <li><strong>Not assessed:</strong> ${escapeHtml(notAssessed.join(', ') || 'none')}</li>
           <li><strong>Pages read:</strong> ${auditResults.pagesRead.length}</li>
           <li><strong>Findings removed (evidence did not check out):</strong> ${escapeHtml(auditResults.droppedFindings)}</li>

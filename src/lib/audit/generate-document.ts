@@ -23,8 +23,8 @@ import {
 } from 'docx';
 import * as fs from 'fs';
 import * as path from 'path';
-import { HOW_MADE_HEADING, areasReadPhrase, evidenceLine, howMadeText, notAssessedLabel, scoreLine } from './present';
-import type { AuditResults, CategoryResult, Evidence } from './types';
+import { HOW_MADE_HEADING, areasAssessedPhrase, effortLine, evidenceLine, howMadeText, notAssessedLabel, scoreLine } from './present';
+import type { AreaResult, AuditResults, Evidence } from './types';
 
 // Enclave Development Brand Colors
 const BRAND = {
@@ -85,11 +85,11 @@ export async function generateAuditDocument(
   const {
     websiteUrl,
     overallScore,
-    categories,
-    topStrengths,
-    criticalIssues,
-    actionPlan,
-    summary,
+    areas,
+    working,
+    fixes,
+    phoneCallouts,
+    whereYouStand,
   } = auditResults;
 
   const generatedDate = new Date();
@@ -245,7 +245,7 @@ export async function generateAuditDocument(
         new Paragraph({
           alignment: AlignmentType.CENTER,
           spacing: { before: 200 },
-          children: [new TextRun({ text: `Score for ${areasReadPhrase(auditResults)}`, size: 22, bold: true, color: BRAND.MEDIUM_GRAY, allCaps: true })]
+          children: [new TextRun({ text: `Score for ${areasAssessedPhrase(auditResults)}`, size: 22, bold: true, color: BRAND.MEDIUM_GRAY, allCaps: true })]
         }),
         new Paragraph({
           alignment: AlignmentType.CENTER,
@@ -278,105 +278,91 @@ export async function generateAuditDocument(
 
         new Paragraph({ children: [new PageBreak()] }),
 
-        // === EXECUTIVE SUMMARY ===
+        // === WHERE YOU STAND ===
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
-          children: [new TextRun("Executive Summary")]
+          children: [new TextRun("Where You Stand")]
         }),
         new Paragraph({
           spacing: { after: 200 },
-          children: [new TextRun(summary)]
+          children: [new TextRun(whereYouStand)]
         }),
         new Paragraph({
           spacing: { after: 200 },
           children: [new TextRun({ text: `${scoreLine(auditResults)}.`, bold: true })]
         }),
 
-        // Score Summary Table
+        // === THE SHORT VERSION ===
         new Paragraph({
-          heading: HeadingLevel.HEADING_2,
-          children: [new TextRun("Score Breakdown")]
+          heading: HeadingLevel.HEADING_1,
+          children: [new TextRun("The Short Version")]
         }),
-        generateScoreTable(categories),
-
-        // Top Strengths
-        new Paragraph({
+        ...(working.length > 0 ? [new Paragraph({
           heading: HeadingLevel.HEADING_2,
-          children: [new TextRun("Top Strengths")]
-        }),
-        ...topStrengths.flatMap(s => [
+          children: [new TextRun("What Is Working")]
+        })] : []),
+        ...working.flatMap(item => [
           new Paragraph({
             numbering: { reference: "bullet-list", level: 0 },
             spacing: { after: 40 },
             children: [
-              new TextRun({ text: s.title + ": ", bold: true }),
-              new TextRun(s.description)
+              new TextRun({ text: item.title + ": ", bold: true }),
+              new TextRun(item.line)
             ]
           }),
-          evidenceParagraph(s.evidence),
+          evidenceParagraph(item.evidence),
         ]),
 
-        // Critical Issues
         new Paragraph({
           heading: HeadingLevel.HEADING_2,
-          children: [new TextRun("Priority Issues to Address")]
+          children: [new TextRun("The Fixes That Matter Most")]
         }),
-        ...criticalIssues.slice(0, 5).flatMap(issue => [
+        ...fixes.flatMap((fix, index) => [
           new Paragraph({
-            numbering: { reference: "bullet-list", level: 0 },
-            spacing: { after: 40 },
-            children: [
-              new TextRun({ text: issue.title + ": ", bold: true, color: BRAND.DANGER }),
-              new TextRun({ text: issue.description, color: BRAND.DARK_GRAY })
-            ]
+            spacing: { before: 200, after: 60 },
+            children: [new TextRun({ text: `${index + 1}. ${fix.headline}`, bold: true, color: BRAND.DANGER })]
           }),
-          evidenceParagraph(issue.evidence),
+          labelled("What we saw", fix.whatWeSaw),
+          evidenceParagraph(fix.evidence),
+          labelled("Why it matters", fix.whyItMatters),
+          labelled("The fix", fix.theFix),
+          new Paragraph({
+            indent: { left: 360 },
+            spacing: { after: 120 },
+            children: [new TextRun({ text: effortLine(fix), color: BRAND.DARK_GRAY })]
+          }),
         ]),
 
+        // === YOUR SITE ON A PHONE (only when a screenshot was supplied) ===
+        ...(phoneCallouts.length > 0 ? [
+          new Paragraph({
+            heading: HeadingLevel.HEADING_2,
+            children: [new TextRun("Your Site on a Phone")]
+          }),
+          ...phoneCallouts.map(callout => new Paragraph({
+            numbering: { reference: "bullet-list", level: 0 },
+            children: [
+              new TextRun({ text: callout.title + ": ", bold: true }),
+              new TextRun(callout.line)
+            ]
+          })),
+        ] : []),
+
         new Paragraph({ children: [new PageBreak()] }),
 
-        // === DETAILED ANALYSIS ===
+        // === THE SCORECARD ===
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
-          children: [new TextRun("Detailed Analysis")]
+          children: [new TextRun("The Scorecard")]
         }),
-        ...generateCategoryAnalysis(categories),
+        generateScoreTable(areas),
 
-        new Paragraph({ children: [new PageBreak()] }),
-
-        // === ACTION PLAN ===
+        // === AREA BY AREA ===
         new Paragraph({
           heading: HeadingLevel.HEADING_1,
-          children: [new TextRun("Prioritized Action Plan")]
+          children: [new TextRun("What We Found, Area by Area")]
         }),
-
-        new Paragraph({
-          heading: HeadingLevel.HEADING_2,
-          children: [new TextRun("Quick Wins (This Week)")]
-        }),
-        ...(actionPlan?.quickWins || []).map(item => new Paragraph({
-          numbering: { reference: "bullet-list", level: 0 },
-          children: [new TextRun(item)]
-        })),
-
-        new Paragraph({
-          heading: HeadingLevel.HEADING_2,
-          children: [new TextRun("Short-Term (1-4 Weeks)")]
-        }),
-        ...(actionPlan?.shortTerm || []).map(item => new Paragraph({
-          numbering: { reference: "bullet-list", level: 0 },
-          children: [new TextRun(item)]
-        })),
-
-        new Paragraph({
-          heading: HeadingLevel.HEADING_2,
-          children: [new TextRun("Strategic (1-3 Months)")]
-        }),
-        ...(actionPlan?.strategic || []).map(item => new Paragraph({
-          numbering: { reference: "bullet-list", level: 0 },
-          spacing: { after: 100 },
-          children: [new TextRun({ text: item, color: BRAND.DARK_GRAY })]
-        })),
+        ...generateAreaAnalysis(areas),
 
         new Paragraph({ children: [new PageBreak()] }),
 
@@ -501,63 +487,54 @@ export async function generateAuditDocument(
   return await Packer.toBuffer(doc);
 }
 
-function generateScoreTable(categories: CategoryResult[]): Table {
-  const headerRow = new TableRow({
+// A short labelled line inside a fix. Always text runs: nothing here is parsed as markup.
+function labelled(label: string, text: string): Paragraph {
+  return new Paragraph({
+    indent: { left: 360 },
+    spacing: { after: 60 },
     children: [
-      new TableCell({
-        shading: { fill: BRAND.ORANGE, type: ShadingType.CLEAR },
-        width: { size: 50, type: WidthType.PERCENTAGE },
-        children: [new Paragraph({
-          children: [new TextRun({ text: "Category", bold: true, color: BRAND.WHITE, size: 22 })]
-        })]
-      }),
-      new TableCell({
-        shading: { fill: BRAND.ORANGE, type: ShadingType.CLEAR },
-        width: { size: 25, type: WidthType.PERCENTAGE },
-        children: [new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [new TextRun({ text: "Score", bold: true, color: BRAND.WHITE, size: 22 })]
-        })]
-      }),
-      new TableCell({
-        shading: { fill: BRAND.ORANGE, type: ShadingType.CLEAR },
-        width: { size: 25, type: WidthType.PERCENTAGE },
-        children: [new Paragraph({
-          alignment: AlignmentType.CENTER,
-          children: [new TextRun({ text: "Status", bold: true, color: BRAND.WHITE, size: 22 })]
-        })]
-      }),
+      new TextRun({ text: `${label}: `, bold: true }),
+      new TextRun(text)
     ]
   });
+}
 
-  const dataRows = categories.map((cat, index) => {
+function generateScoreTable(areas: AreaResult[]): Table {
+  const header = (text: string, width: number, centered = false) => new TableCell({
+    shading: { fill: BRAND.ORANGE, type: ShadingType.CLEAR },
+    width: { size: width, type: WidthType.PERCENTAGE },
+    children: [new Paragraph({
+      alignment: centered ? AlignmentType.CENTER : AlignmentType.LEFT,
+      children: [new TextRun({ text, bold: true, color: BRAND.WHITE, size: 22 })]
+    })]
+  });
+  const headerRow = new TableRow({ children: [header("Area", 28), header("Score", 17, true), header("In one line", 55)] });
+
+  const dataRows = areas.map((area, index) => {
     const fill = index % 2 === 0 ? "FFFFFF" : "F9F9F9";
     // an area that was not assessed shows words, never a number
-    const scoreText = cat.assessed ? `${cat.score}/10` : "Not scored";
-    const statusText = cat.assessed ? cat.status : notAssessedLabel(cat);
-    const color = cat.assessed ? getScoreColor(cat.score) : BRAND.MEDIUM_GRAY;
+    const scoreText = area.assessed ? `${area.score}/10` : notAssessedLabel(area);
+    const lineText = area.assessed ? area.line : area.reason;
+    const color = area.assessed ? getScoreColor(area.score) : BRAND.MEDIUM_GRAY;
     return new TableRow({
       children: [
         new TableCell({
           borders: cellBorders,
           shading: { fill, type: ShadingType.CLEAR },
-          children: [new Paragraph({ children: [new TextRun({ text: cat.name, size: 22, color: BRAND.DARK })] })]
+          children: [new Paragraph({ children: [new TextRun({ text: area.name, size: 22, color: BRAND.DARK })] })]
         }),
         new TableCell({
           borders: cellBorders,
           shading: { fill, type: ShadingType.CLEAR },
           children: [new Paragraph({
             alignment: AlignmentType.CENTER,
-            children: [new TextRun({ text: scoreText, bold: cat.assessed, size: cat.assessed ? 24 : 20, color })]
+            children: [new TextRun({ text: scoreText, bold: area.assessed, size: area.assessed ? 24 : 20, color })]
           })]
         }),
         new TableCell({
           borders: cellBorders,
           shading: { fill, type: ShadingType.CLEAR },
-          children: [new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [new TextRun({ text: statusText, size: 20, color })]
-          })]
+          children: [new Paragraph({ children: [new TextRun({ text: lineText, size: 20, color: area.assessed ? BRAND.DARK_GRAY : BRAND.MEDIUM_GRAY })] })]
         }),
       ]
     });
@@ -569,7 +546,7 @@ function generateScoreTable(categories: CategoryResult[]): Table {
   });
 }
 
-// The words a finding rests on, or what was looked for. Always a text run: nothing here is parsed as markup.
+// What a finding rests on, with its lead-in. Always a text run: nothing here is parsed as markup.
 function evidenceParagraph(evidence: Evidence): Paragraph {
   return new Paragraph({
     indent: { left: 720 },
@@ -578,65 +555,46 @@ function evidenceParagraph(evidence: Evidence): Paragraph {
   });
 }
 
-function generateCategoryAnalysis(categories: CategoryResult[]): Paragraph[] {
+function generateAreaAnalysis(areas: AreaResult[]): Paragraph[] {
   const paragraphs: Paragraph[] = [];
 
-  for (const cat of categories) {
-    if (!cat.assessed) {
+  for (const area of areas) {
+    if (!area.assessed) {
       // no score, and the fixed sentence saying why
       paragraphs.push(new Paragraph({
         heading: HeadingLevel.HEADING_2,
-        children: [new TextRun(cat.name)]
+        children: [new TextRun(area.name)]
       }));
       paragraphs.push(new Paragraph({
         spacing: { after: 160 },
-        children: [new TextRun({ text: cat.reason, color: BRAND.MEDIUM_GRAY })]
+        children: [new TextRun({ text: area.reason, color: BRAND.MEDIUM_GRAY })]
       }));
       continue;
     }
 
-    // Category heading
     paragraphs.push(new Paragraph({
       heading: HeadingLevel.HEADING_2,
       children: [
-        new TextRun(`${cat.name} `),
+        new TextRun(`${area.name} `),
         new TextRun({
-          text: `(${cat.score}/10 - ${cat.status})`,
-          color: getScoreColor(cat.score)
+          text: `(${area.score}/10 - ${area.status})`,
+          color: getScoreColor(area.score)
         })
       ]
     }));
+    paragraphs.push(new Paragraph({
+      spacing: { after: 120 },
+      children: [new TextRun(area.line)]
+    }));
 
-    // Findings, each with its evidence
-    if (cat.findings.length > 0) {
+    // Findings, each with what it rests on
+    for (const finding of area.findings) {
       paragraphs.push(new Paragraph({
-        heading: HeadingLevel.HEADING_3,
-        children: [new TextRun("What We Found")]
+        numbering: { reference: "bullet-list", level: 0 },
+        spacing: { after: 40 },
+        children: [new TextRun(finding.text)]
       }));
-
-      for (const finding of cat.findings) {
-        paragraphs.push(new Paragraph({
-          numbering: { reference: "bullet-list", level: 0 },
-          spacing: { after: 40 },
-          children: [new TextRun(finding.text)]
-        }));
-        paragraphs.push(evidenceParagraph(finding.evidence));
-      }
-    }
-
-    // Recommendations
-    if (cat.recommendations.length > 0) {
-      paragraphs.push(new Paragraph({
-        heading: HeadingLevel.HEADING_3,
-        children: [new TextRun("Recommendations")]
-      }));
-
-      for (const rec of cat.recommendations) {
-        paragraphs.push(new Paragraph({
-          numbering: { reference: "bullet-list", level: 0 },
-          children: [new TextRun(rec)]
-        }));
-      }
+      paragraphs.push(evidenceParagraph(finding.evidence));
     }
   }
 

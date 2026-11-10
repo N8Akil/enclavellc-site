@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MAX_LINKED_PAGES, PAGE_TEXT_CAP, TOTAL_TEXT_CAP, TRUNCATION_MARKER } from '@/lib/audit/config'
-import { extractPage, fetchWebsiteContent, validateUrl } from '@/lib/audit/fetch-website'
+import { MAX_LINK_CHECKS, MAX_LINKED_PAGES, PAGE_TEXT_CAP, TOTAL_TEXT_CAP, TRUNCATION_MARKER } from '@/lib/audit/config'
+import { countSitemapLocs, extractPage, fetchWebsiteContent, readRobots, validateUrl } from '@/lib/audit/fetch-website'
 import { UnsafeUrlError, type ResolvedAddress, type Transport, type TransportRequest } from '@/lib/audit/safe-fetch'
 
 // No socket and no DNS: the resolver and transport are stand-ins.
 const PUBLIC = '93.184.216.34'
 const HTML = { 'content-type': 'text/html' }
 
-function site(pages: Record<string, string | { status?: number; headers?: Record<string, string>; hang?: boolean }>, dns: Record<string, string[]> = {}) {
+type Served = string | { status?: number; headers?: Record<string, string>; hang?: boolean; body?: string; head?: number; throws?: boolean }
+function site(pages: Record<string, Served>, dns: Record<string, string[]> = {}) {
   const calls: TransportRequest[] = []
   let inFlight = 0
   let peak = 0
+  // how many response bodies were actually read from
+  let bodiesRead = 0
   const transport: Transport = async (request) => {
     calls.push(request)
     inFlight++
@@ -18,18 +21,22 @@ function site(pages: Record<string, string | { status?: number; headers?: Record
     try {
       await Promise.resolve()
       const page = pages[request.url.href]
-      if (page === undefined) return { status: 404, headers: HTML, body: (async function* () {})() }
+      const read = (text: string) => (async function* () { bodiesRead++; yield new TextEncoder().encode(text) })()
+      if (page === undefined) return { status: 404, headers: HTML, body: read('not found') }
       if (typeof page !== 'string' && page.hang) return await new Promise<never>(() => {})
-      const body = typeof page === 'string' ? page : ''
-      const status = typeof page === 'string' ? 200 : page.status ?? 200
+      if (typeof page !== 'string' && page.throws) throw new Error(`connect ECONNREFUSED ${request.address}`)
+      const body = typeof page === 'string' ? page : page.body ?? ''
+      const status = typeof page === 'string' ? 200 : request.method === 'HEAD' && page.head !== undefined ? page.head : page.status ?? 200
       const headers = typeof page === 'string' ? HTML : page.headers ?? HTML
-      return { status, headers, body: (async function* () { yield new TextEncoder().encode(body) })() }
+      return { status, headers, body: read(body) }
     } finally {
       inFlight--
     }
   }
   const resolver = vi.fn(async (hostname: string): Promise<ResolvedAddress[]> => (dns[hostname] ?? [PUBLIC]).map((address) => ({ address, family: 4 })))
-  return { calls, transport, resolver, options: { transport, resolver }, peak: () => peak }
+  // the requests that read a page of the site (as opposed to robots.txt, the sitemap, the http:// probe, link checks)
+  const pageCalls = () => calls.filter((c) => (c.method ?? 'GET') === 'GET' && c.url.protocol === 'https:' && !/^\/(robots\.txt|sitemap\.xml)$/.test(c.url.pathname))
+  return { calls, pageCalls, transport, resolver, options: { transport, resolver }, peak: () => peak, bodiesRead: () => bodiesRead }
 }
 
 afterEach(() => {
@@ -47,7 +54,7 @@ describe('extractPage', () => {
 <footer><a href="/privacy-policy">Privacy</a><a href="https://www.facebook.com/x">Facebook</a> 12 Main Street</footer></body></html>`
 
   it('computes the facts on the FULL document, including what sits in the header, navigation and footer', () => {
-    expect(extractPage(html, 'https://x.example.test/').facts).toEqual({
+    expect(extractPage(html, 'https://x.example.test/').facts).toMatchObject({
       isHttps: true,
       title: 'Garrett Plumbing',
       metaDescription: 'Family plumbers.',
@@ -64,8 +71,49 @@ describe('extractPage', () => {
     })
   })
 
+  it('reads what the five areas need from the full document: robots meta, sharing details, structured data, first links, own links, forms', () => {
+    const rich = `<html><head><title>T</title>
+<meta name="ROBOTS" content="NoIndex, nofollow">
+<meta property="og:title" content=" Garrett  Plumbing "><meta property="og:image" content="https://x.example.test/share.png"><meta property="og:site_name" content="Garrett Plumbing">
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","name":"Site"},{"@type":["Plumber","Organization"],"name":"Garrett Plumbing LLC"}]}</script>
+<script type="application/ld+json">{ this is not json</script></head>
+<body><header><a href="/">Home</a><a href="tel:+15550100"> Call  555-0100 </a><a href="mailto:hi@x.example.test">hi@x.example.test</a><a href="/careers#top">Careers</a></header>
+<a href="/about?x=1">About</a><a href="https://other.example.test/">Elsewhere</a><a href="http://x.example.test:8080/a">Odd port</a><a href="/about?x=1#team">About again</a>
+<form><label>Your name</label><input name="n" placeholder="PLACEHOLDER-NOT-SHOWN"><button>Request care</button></form></body></html>`
+    const { facts } = extractPage(rich, 'https://x.example.test/')
+    expect(facts).toMatchObject({
+      robotsMeta: 'noindex, nofollow',
+      ogTitle: 'Garrett Plumbing',
+      ogImage: 'https://x.example.test/share.png',
+      ogSiteName: 'Garrett Plumbing',
+      hasLocalBusinessSchema: true,
+      schemaName: 'Garrett Plumbing LLC',
+      phoneLink: { text: 'Call 555-0100', href: 'tel:+15550100' },
+      emailLink: { text: 'hi@x.example.test', href: 'mailto:hi@x.example.test' },
+    })
+    expect(facts.firstLinks.slice(0, 4)).toEqual([
+      { text: 'Home', href: 'https://x.example.test/' },
+      { text: 'Call 555-0100', href: 'tel:+15550100' },
+      { text: 'hi@x.example.test', href: 'mailto:hi@x.example.test' },
+      { text: 'Careers', href: 'https://x.example.test/careers#top' },
+    ])
+    // own links: this host only, each once, no fragment, and only what rule 1 of the guard allows
+    expect(facts.ownLinks).toEqual([
+      { text: 'Home', href: 'https://x.example.test/' },
+      { text: 'Careers', href: 'https://x.example.test/careers' },
+      { text: 'About', href: 'https://x.example.test/about?x=1' },
+    ])
+    // a form's visible words only
+    expect(facts.forms).toEqual(['Your name Request care'])
+  })
+
+  it('with none of those, each is empty, and a page whose structured data is not a local business says so', () => {
+    const { facts } = extractPage('<html><head><script type="application/ld+json">{"@type":"WebSite","name":"Just a site"}</script></head><body><p>Hello</p></body></html>', 'http://x.example.test/')
+    expect(facts).toMatchObject({ robotsMeta: '', ogTitle: '', ogImage: '', ogSiteName: '', hasLocalBusinessSchema: false, schemaName: '', phoneLink: null, emailLink: null, firstLinks: [], ownLinks: [], forms: [] })
+  })
+
   it('reports what is missing when it is missing', () => {
-    expect(extractPage('<html><body><p>Hello</p></body></html>', 'http://x.example.test/').facts).toEqual({
+    expect(extractPage('<html><body><p>Hello</p></body></html>', 'http://x.example.test/').facts).toMatchObject({
       isHttps: false,
       title: '',
       metaDescription: '',
@@ -258,10 +306,12 @@ describe('fetchWebsiteContent', () => {
     expect(JSON.stringify(result)).not.toContain('OTHER-SITE-TEXT')
 
     const requested = s.calls.map((c) => c.url.href)
-    // never requested: the pdf, mailto, tel, javascript, the other host, the odd port, the credentials, the router
-    for (const url of requested) expect(url).toMatch(/^https:\/\/(x|other)\.example\.test\//)
+    // never requested: mailto, tel, javascript, the other host's own links, the odd port, the credentials, the router
+    for (const url of requested) expect(url).toMatch(/^https?:\/\/(x|other)\.example\.test\//)
     expect(requested.filter((u) => u.includes('other.example.test'))).toEqual(['https://other.example.test/x'])
-    expect(requested).not.toContain('https://x.example.test/brochure.pdf')
+    // the pdf is never read as a page; it is only asked whether it answers (HEAD), like any link on the site's own host
+    expect(s.pageCalls().map((c) => c.url.href)).not.toContain('https://x.example.test/brochure.pdf')
+    expect(s.calls.filter((c) => c.url.pathname === '/brochure.pdf').map((c) => c.method)).toEqual(['HEAD'])
     expect(requested.some((u) => u.includes('8080') || u.includes('secret') || u.includes('192.168') || u.includes('169.254'))).toBe(false)
     // every request went to the vetted public address
     expect(new Set(s.calls.map((c) => c.address))).toEqual(new Set([PUBLIC]))
@@ -285,7 +335,7 @@ describe('fetchWebsiteContent', () => {
     const result = await fetchWebsiteContent('https://x.example.test', s.options)
     expect(MAX_LINKED_PAGES).toBe(10)
     expect(result.pages).toHaveLength(11)
-    expect(s.calls).toHaveLength(11)
+    expect(s.pageCalls()).toHaveLength(11)
     expect(s.peak()).toBeLessThanOrEqual(3)
   })
 
@@ -343,5 +393,225 @@ describe('fetchWebsiteContent', () => {
     expect(s.calls.slice(4).every((c) => c.signal.aborted)).toBe(true)
     await vi.advanceTimersByTimeAsync(120_000)
     expect(s.calls).toHaveLength(7)
+  })
+})
+
+describe('the site besides its pages: robots.txt, the sitemap, the http:// address, its own links', () => {
+  const TEXT = { 'content-type': 'text/plain; charset=utf-8' }
+  const XML = { 'content-type': 'application/xml' }
+  const home = (links = '') => `<html><head><title>Home</title></head><body><h1>Home</h1>${links}</body></html>`
+  // addresses that appear ONLY inside the files: one on the site itself, one on another site, two internal ones
+  const SECRET_URLS = ['https://x.example.test/only-in-the-file', 'https://other.example.test/from-file', 'http://10.0.0.1/admin', 'http://169.254.169.254/latest/']
+
+  describe('readRobots', () => {
+    it.each([
+      ['User-agent: *\nDisallow: /', true],
+      ['user-agent: *\ndisallow: /   # everything', true],
+      ['User-agent: *\r\nDisallow: /\r\n', true],
+      ['User-agent: googlebot\nUser-agent: *\nDisallow: /', true],
+      ['User-agent: *\nDisallow: /\nAllow: /', false],
+      ['User-agent: *\nDisallow: /admin', false],
+      ['User-agent: *\nDisallow:', false],
+      ['User-agent: badbot\nDisallow: /', false],
+      ['User-agent: badbot\nDisallow: /\n\nUser-agent: *\nDisallow: /private/', false],
+      ['User-agent: *\nAllow: /\n\nUser-agent: badbot\nDisallow: /', false],
+      ['# nothing here', false],
+      ['', false],
+      ['<html>not a robots file</html>', false],
+    ])('%j disallows the home page: %s', (text, expected) => {
+      expect(readRobots(text)).toEqual({ disallowsHome: expected, rule: 'Disallow: /' })
+    })
+  })
+
+  describe('countSitemapLocs', () => {
+    it.each([
+      ['<?xml version="1.0"?><urlset><url><loc>https://x.example.test/</loc></url><url><loc>https://x.example.test/a</loc></url></urlset>', 2],
+      ['<sitemapindex><sitemap><loc>https://x.example.test/s1.xml</loc></sitemap></sitemapindex>', 1],
+      ['<urlset><url><loc>  </loc></url></urlset>', 0],
+      ['<urlset></urlset>', 0],
+      ['<html><body>Page not found</body></html>', 0],
+      ['', 0],
+    ])('%j has %i', (xml, expected) => {
+      expect(countSitemapLocs(xml)).toBe(expected)
+    })
+  })
+
+  it('reads robots.txt and sitemap.xml with their own content types, and reports what they say', async () => {
+    const s = site({
+      'https://x.example.test/': home(),
+      'https://x.example.test/robots.txt': { headers: TEXT, body: 'User-agent: *\nDisallow: /\nSitemap: https://x.example.test/sitemap.xml' },
+      'https://x.example.test/sitemap.xml': { headers: XML, body: '<urlset><url><loc>https://x.example.test/</loc></url><url><loc>https://x.example.test/a</loc></url><url><loc>https://x.example.test/b</loc></url></urlset>' },
+      'http://x.example.test/': { status: 301, headers: { location: 'https://x.example.test/' } },
+    })
+    const { probes } = await fetchWebsiteContent('https://x.example.test', s.options)
+    expect(probes).toEqual({
+      robots: { state: 'found', disallowsHome: true, rule: 'Disallow: /' },
+      sitemap: { state: 'found', locCount: 3 },
+      httpsRedirect: 'redirects',
+      links: { checked: 0, broken: [] },
+    })
+    // every one of those requests went through the guard to the vetted address
+    expect(new Set(s.calls.map((c) => c.address))).toEqual(new Set([PUBLIC]))
+  })
+
+  it('READ, NEVER FOLLOWED: no address found inside robots.txt or the sitemap is ever requested', async () => {
+    const s = site({
+      'https://x.example.test/': home(),
+      'https://x.example.test/robots.txt': { headers: TEXT, body: `User-agent: *\nAllow: /\n${SECRET_URLS.map((u) => `Sitemap: ${u}\nDisallow: ${u}`).join('\n')}` },
+      'https://x.example.test/sitemap.xml': { headers: XML, body: `<sitemapindex>${SECRET_URLS.map((u) => `<sitemap><loc>${u}</loc></sitemap>`).join('')}</sitemapindex>` },
+    })
+    const { probes, pages } = await fetchWebsiteContent('https://x.example.test', s.options)
+    expect(probes!.sitemap).toEqual({ state: 'found', locCount: 4 })
+    expect(pages).toHaveLength(1)
+    // exactly four requests: the home page, the two files, and the http:// address. Nothing from inside the files.
+    expect(s.calls.map((c) => c.url.href).sort()).toEqual(['http://x.example.test/', 'https://x.example.test/', 'https://x.example.test/robots.txt', 'https://x.example.test/sitemap.xml'])
+    for (const call of s.calls) for (const secret of ['10.0.0.1', '169.254', 'other.example.test', 'only-in-the-file', 'from-file']) expect(`${call.url.href} ${call.address}`).not.toContain(secret)
+    expect(new Set(s.resolver.mock.calls.map(([host]) => host))).toEqual(new Set(['x.example.test']))
+  })
+
+  it.each([
+    ['not there (404)', {}, { robots: { state: 'missing' }, sitemap: { state: 'missing' } }],
+    [
+      'served as an HTML page (a soft 404)',
+      { 'https://x.example.test/robots.txt': '<html>Not found</html>', 'https://x.example.test/sitemap.xml': '<html>Not found</html>' },
+      { robots: { state: 'missing' }, sitemap: { state: 'missing' } },
+    ],
+    [
+      'a sitemap that is XML with no address in it',
+      { 'https://x.example.test/sitemap.xml': { headers: XML, body: '<urlset></urlset>' } },
+      { sitemap: { state: 'missing' } },
+    ],
+    [
+      'no answer at all',
+      { 'https://x.example.test/robots.txt': { throws: true }, 'https://x.example.test/sitemap.xml': { throws: true } },
+      { robots: { state: 'unknown' }, sitemap: { state: 'unknown' } },
+    ],
+    [
+      'redirected to another host',
+      {
+        'https://x.example.test/robots.txt': { status: 302, headers: { location: 'https://other.example.test/robots.txt' } },
+        'https://other.example.test/robots.txt': { headers: TEXT, body: 'User-agent: *\nDisallow: /' },
+      },
+      { robots: { state: 'unknown' } },
+    ],
+  ])('robots.txt / sitemap.xml %s', async (_, served, expected) => {
+    const s = site({ 'https://x.example.test/': home(), ...(served as Record<string, Served>) })
+    const { probes } = await fetchWebsiteContent('https://x.example.test', s.options)
+    expect(probes).toMatchObject(expected)
+  })
+
+  it.each([
+    ['ends on https://', { status: 301, headers: { location: 'https://x.example.test/' } }, 'redirects'],
+    ['answers on http:// itself', home(), 'no_redirect'],
+    ['does not answer on http://', { throws: true }, 'unknown'],
+    ['answers with an error on http://', { status: 500 }, 'unknown'],
+  ])('the http:// address %s: %s', async (_, served, expected) => {
+    const s = site({ 'https://x.example.test/': home(), 'http://x.example.test/': served as Served })
+    expect((await fetchWebsiteContent('https://x.example.test', s.options)).probes!.httpsRedirect).toBe(expected)
+    expect(s.calls.filter((c) => c.url.protocol === 'http:')).toHaveLength(1)
+  })
+
+  it('a site that is itself on http:// is not asked the redirect question', async () => {
+    const s = site({ 'http://x.example.test/': home() })
+    const { probes, pages } = await fetchWebsiteContent('http://x.example.test', s.options)
+    expect(pages[0].facts.isHttps).toBe(false)
+    expect(probes!.httpsRedirect).toBe('unknown')
+    expect(s.calls.filter((c) => c.url.href === 'http://x.example.test/')).toHaveLength(1)
+  })
+
+  describe('link checks', () => {
+    it('asks the site\'s OWN links for their status: HEAD first, GET only on 405 or 501, and no body is ever read', async () => {
+      const links = ['/ok', '/gone', '/broken', '/no-head', '/no-head-501', '/forbidden', '/moved-here', '/moved-away', '/file.pdf']
+        .map((path) => `<a href="${path}">${path}</a>`)
+        .join('')
+      const external = '<a href="https://other.example.test/x">Other site</a><a href="https://partner.example.test/">Partner</a><a href="mailto:a@b.test">Mail</a><a href="tel:1">Tel</a>'
+      const page = '<html><head><title>P</title></head><body>page</body></html>'
+      const s = site({
+        'https://x.example.test/': home(links + external),
+        // /ok is read as a page, so it is known to answer and is not asked again
+        'https://x.example.test/ok': page,
+        'https://x.example.test/gone': { status: 404 },
+        'https://x.example.test/broken': { status: 500 },
+        'https://x.example.test/no-head': { head: 405, status: 200, headers: { 'content-type': 'application/pdf' }, body: 'BODY-NOT-READ' },
+        'https://x.example.test/no-head-501': { head: 501, status: 404 },
+        'https://x.example.test/forbidden': { status: 403 },
+        'https://x.example.test/moved-here': { status: 301, headers: { location: '/ok' } },
+        'https://x.example.test/moved-away': { status: 302, headers: { location: 'https://other.example.test/landing' } },
+        'https://x.example.test/file.pdf': { status: 200, headers: { 'content-type': 'application/pdf' }, body: 'PDF-NOT-READ' },
+      })
+      const before = s.bodiesRead()
+      const { probes, pages } = await fetchWebsiteContent('https://x.example.test', s.options)
+      expect(pages.map((p) => p.url)).toEqual(['https://x.example.test/', 'https://x.example.test/ok'])
+
+      // moved-away leads to another host: it is not followed and not counted as checked
+      expect(probes!.links.checked).toBe(7)
+      expect(probes!.links.broken.sort((a, b) => a.url.localeCompare(b.url))).toEqual([
+        { url: 'https://x.example.test/broken', status: 500 },
+        { url: 'https://x.example.test/forbidden', status: 403 },
+        { url: 'https://x.example.test/gone', status: 404 },
+        { url: 'https://x.example.test/no-head-501', status: 404 },
+      ])
+
+      const heads = s.calls.filter((c) => c.method === 'HEAD').map((c) => c.url.pathname)
+      // moved-here is followed on the same host with HEAD again
+      expect(heads.sort()).toEqual(['/broken', '/file.pdf', '/forbidden', '/gone', '/moved-away', '/moved-here', '/no-head', '/no-head-501', '/ok'].sort())
+      // GET: each of these paths was tried once as a page (that is how the site's pages are found). Only the two
+      // whose server refused HEAD were asked a second time with GET; the pdf, never a page, was never asked with GET.
+      const gets = (path: string) => s.calls.filter((c) => (c.method ?? 'GET') === 'GET' && c.url.pathname === path).length
+      expect(['/gone', '/broken', '/forbidden', '/moved-here', '/moved-away'].map(gets)).toEqual([1, 1, 1, 1, 1])
+      expect(['/no-head', '/no-head-501'].map(gets)).toEqual([2, 2])
+      expect(gets('/file.pdf')).toBe(0)
+      // and the order for a link is HEAD, then GET
+      const order = s.calls.filter((c) => c.url.pathname === '/no-head').map((c) => c.method ?? 'GET')
+      expect(order).toEqual(['GET', 'HEAD', 'GET'])
+
+      // EXTERNAL LINKS ARE NEVER REQUESTED BY A LINK CHECK: not the ones on the page, not the one a redirect points at
+      expect(s.calls.filter((c) => c.method === 'HEAD' && c.url.host !== 'x.example.test')).toEqual([])
+      expect(s.calls.some((c) => c.url.host === 'partner.example.test')).toBe(false)
+      expect(s.resolver.mock.calls.map(([host]) => host)).not.toContain('partner.example.test')
+      // (the one request to another host here is the PAGE read of /moved-away following its redirect, as page reads
+      // have done since the guard was built; the page it lands on is not part of the site and is dropped)
+      expect(s.calls.filter((c) => c.url.host !== 'x.example.test').map((c) => `${c.method ?? 'GET'} ${c.url.href}`)).toEqual(['GET https://other.example.test/landing'])
+      // no body of a checked link was read: the bodies read are the pages, the two files and the http probe at most
+      const linkPaths = new Set(['/gone', '/broken', '/no-head', '/no-head-501', '/forbidden', '/moved-here', '/moved-away', '/file.pdf'])
+      expect(s.bodiesRead() - before).toBeLessThanOrEqual(s.calls.filter((c) => !linkPaths.has(c.url.pathname) && c.method !== 'HEAD').length)
+      expect(JSON.stringify({ probes, pages })).not.toMatch(/BODY-NOT-READ|PDF-NOT-READ/)
+    })
+
+    it('at most 20 links are asked, a few at a time', async () => {
+      const links = Array.from({ length: 60 }, (_, i) => `<a href="/l${String(i).padStart(2, '0')}.pdf">L${i}</a>`).join('')
+      const s = site({ 'https://x.example.test/': home(links) })
+      const { probes } = await fetchWebsiteContent('https://x.example.test', s.options)
+      expect(MAX_LINK_CHECKS).toBe(20)
+      expect(s.calls.filter((c) => c.method === 'HEAD')).toHaveLength(20)
+      expect(probes!.links.checked).toBe(20)
+      expect(probes!.links.broken).toHaveLength(20)
+      expect(s.peak()).toBeLessThanOrEqual(3)
+    })
+
+    it('a link that does not answer is not counted as checked or as broken', async () => {
+      const s = site({ 'https://x.example.test/': home('<a href="/a.pdf">A</a><a href="/b.pdf">B</a>'), 'https://x.example.test/a.pdf': { throws: true }, 'https://x.example.test/b.pdf': { status: 200 } })
+      expect((await fetchWebsiteContent('https://x.example.test', s.options)).probes!.links).toEqual({ checked: 1, broken: [] })
+    })
+
+    it('link checks stay inside the 45 second budget: after the deadline no more links are asked', async () => {
+      vi.useFakeTimers()
+      const links = Array.from({ length: 20 }, (_, i) => `<a href="/l${String(i).padStart(2, '0')}.pdf">L${i}</a>`).join('')
+      const pages: Record<string, Served> = { 'https://x.example.test/': home(links) }
+      for (let i = 0; i < 20; i++) pages[`https://x.example.test/l${String(i).padStart(2, '0')}.pdf`] = { hang: true }
+      const s = site(pages)
+      let done: Awaited<ReturnType<typeof fetchWebsiteContent>> | undefined
+      const running = fetchWebsiteContent('https://x.example.test', { ...s.options, timeoutMs: 30_000 }).then((r) => (done = r))
+      await vi.advanceTimersByTimeAsync(44_999)
+      expect(done).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1)
+      await running
+      const asked = s.calls.filter((c) => c.method === 'HEAD').length
+      // three at a time, each cut at 30 s, then the deadline: six at most were ever started
+      expect(asked).toBeLessThanOrEqual(6)
+      expect(done!.probes!.links).toEqual({ checked: 0, broken: [] })
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(s.calls.filter((c) => c.method === 'HEAD')).toHaveLength(asked)
+    })
   })
 })

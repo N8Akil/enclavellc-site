@@ -174,6 +174,8 @@ export interface TransportRequest {
   family: 4 | 6;
   headers: Record<string, string>;
   signal: AbortSignal;
+  // GET unless a link check asks for HEAD
+  method?: 'GET' | 'HEAD';
 }
 export interface TransportResponse {
   status: number;
@@ -216,7 +218,7 @@ export function createNodeTransport(options?: NodeTransportOptions): Transport {
         host: request.hostname,
         port: options?.port ?? (secure ? 443 : 80),
         path: `${request.url.pathname}${request.url.search}`,
-        method: 'GET',
+        method: request.method ?? 'GET',
         headers: request.headers,
         agent: false,
         lookup: pinnedLookup as https.RequestOptions['lookup'],
@@ -246,6 +248,10 @@ export interface SafeFetchOptions {
   timeoutMs?: number;
   maxBytes?: number;
   maxRedirects?: number;
+  // The content types this ONE call accepts. HTML when left out. It can only narrow the choice to other plain
+  // text formats the audit reads (robots.txt, sitemap.xml): see READABLE_TYPES. It changes nothing about where a
+  // request may go: the URL rules, the address check and the pin run before any response exists to have a type.
+  allowedContentTypes?: readonly string[];
 }
 
 export interface SafePage {
@@ -260,7 +266,11 @@ const REQUEST_HEADERS: Record<string, string> = {
   'Accept-Encoding': 'identity',
 };
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
-const HTML_TYPES = ['text/html', 'application/xhtml+xml'];
+const HTML_TYPES: readonly string[] = ['text/html', 'application/xhtml+xml'];
+// every type a call may ask for. Nothing binary, nothing executable: asking for anything else is refused.
+export const READABLE_TYPES: readonly string[] = [...HTML_TYPES, 'text/plain', 'application/xml', 'text/xml'];
+export const PLAIN_TEXT_TYPES: readonly string[] = ['text/plain'];
+export const XML_TYPES: readonly string[] = ['application/xml', 'text/xml'];
 
 function headerValue(headers: TransportResponse['headers'], name: string): string {
   for (const [key, value] of Object.entries(headers)) {
@@ -341,7 +351,15 @@ async function readBody(response: TransportResponse, maxBytes: number, signal: A
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function safeFetchPage(input: string, options: SafeFetchOptions = {}): Promise<SafePage> {
+// What one guarded exchange is for: a page whose body is read, or a link whose status alone is wanted.
+type Purpose =
+  | { kind: 'page'; types: readonly string[] }
+  | { kind: 'status'; method: 'GET' | 'HEAD'; sameHost: string };
+
+type Outcome = { finalUrl: string; status: number; body: string; leftHost: boolean };
+
+// Rules 1-5 for one request and its redirects. Both public functions below are this and nothing else.
+async function guardedRequest(input: string, options: SafeFetchOptions, purpose: Purpose): Promise<Outcome> {
   const resolver = options.resolver ?? defaultResolver;
   const transport = options.transport ?? defaultTransport;
   const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS;
@@ -370,6 +388,7 @@ export async function safeFetchPage(input: string, options: SafeFetchOptions = {
           family,
           headers: { ...REQUEST_HEADERS },
           signal: controller.signal,
+          method: purpose.kind === 'status' ? purpose.method : 'GET',
         }),
         controller.signal
       );
@@ -385,16 +404,24 @@ export async function safeFetchPage(input: string, options: SafeFetchOptions = {
           throw new UnsafeUrlError('BAD_REDIRECT');
         }
         // rule 1 again on the new URL; rules 2-3 run at the top of the next turn
-        current = checkUrl(next);
+        const checked = checkUrl(next);
+        // a link check never leaves the site it is checking: the redirect is noted, not followed
+        if (purpose.kind === 'status' && checked.host !== purpose.sameHost) {
+          return { finalUrl: current.href, status: response.status, body: '', leftHost: true };
+        }
+        current = checked;
         continue;
       }
 
+      // a link check wants the status and nothing else: the body is never read (the response is destroyed below)
+      if (purpose.kind === 'status') return { finalUrl: current.href, status: response.status, body: '', leftHost: false };
+
       if (response.status < 200 || response.status > 299) throw new UnsafeUrlError('HTTP_STATUS');
       const contentType = headerValue(response.headers, 'content-type').split(';')[0].trim().toLowerCase();
-      if (!HTML_TYPES.includes(contentType)) throw new UnsafeUrlError('BAD_CONTENT_TYPE');
+      if (!purpose.types.includes(contentType)) throw new UnsafeUrlError('BAD_CONTENT_TYPE');
 
-      const html = await readBody(response, maxBytes, controller.signal);
-      return { finalUrl: current.href, html };
+      const body = await readBody(response, maxBytes, controller.signal);
+      return { finalUrl: current.href, status: response.status, body, leftHost: false };
     } catch (error) {
       throw asTyped(error, controller.signal);
     } finally {
@@ -408,4 +435,33 @@ export async function safeFetchPage(input: string, options: SafeFetchOptions = {
       controller.abort();
     }
   }
+}
+
+// Reads one page (or, with allowedContentTypes, one robots.txt or sitemap.xml) through the guard.
+export async function safeFetchPage(input: string, options: SafeFetchOptions = {}): Promise<SafePage> {
+  const types = options.allowedContentTypes ?? HTML_TYPES;
+  // the option can ask only for formats the audit reads as text; it cannot be widened to anything else
+  if (types.length === 0 || types.some((type) => !READABLE_TYPES.includes(type))) throw new UnsafeUrlError('BAD_CONTENT_TYPE');
+  const { finalUrl, body } = await guardedRequest(input, options, { kind: 'page', types });
+  return { finalUrl, html: body };
+}
+
+export interface LinkStatus {
+  // the HTTP status of the link on the site's own host
+  status: number;
+  // true when the link redirects to another host: that host is NOT asked, and nothing is known about it
+  leftHost: boolean;
+}
+
+// Asks one link on the audited site's own host for its status, through the guard. HEAD first, GET only when
+// the server says it does not do HEAD (405, 501); no body is ever read. A redirect that stays on the host is
+// followed (each hop vetted again); a redirect to any other host is reported and not followed.
+export async function safeCheckLink(input: string, sameHost: string, options: SafeFetchOptions = {}): Promise<LinkStatus> {
+  // a link on another host is never requested at all
+  if (checkUrl(input).host !== sameHost) throw new UnsafeUrlError('BLOCKED_ADDRESS');
+  let result = await guardedRequest(input, options, { kind: 'status', method: 'HEAD', sameHost });
+  if (!result.leftHost && (result.status === 405 || result.status === 501)) {
+    result = await guardedRequest(input, options, { kind: 'status', method: 'GET', sameHost });
+  }
+  return { status: result.status, leftHost: result.leftHost };
 }

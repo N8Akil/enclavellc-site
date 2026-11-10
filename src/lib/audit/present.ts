@@ -1,30 +1,29 @@
 // src/lib/audit/present.ts
 // Wording shared by the .docx report and the emails, so both say the same true things.
 // These return PLAIN TEXT. The email escapes it with escapeHtml; the .docx puts it in text runs.
-import { NOT_ASSESSED_LABEL, UNASSESSED_CATEGORIES } from './config';
-import type { AssessedCategory, AuditResults, Evidence, UnassessedCategory } from './types';
+import { EFFORT_LABELS, NOT_ASSESSED_LABEL, NOT_MEASURED_SENTENCE } from './config';
+import type { AssessedArea, AuditResults, Evidence, Fix, UnassessedArea } from './types';
 
-const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four'];
+const NUMBER_WORDS = ['no', 'one', 'two', 'three', 'four', 'five'];
 
-export function assessedCategories(results: AuditResults): AssessedCategory[] {
-  return results.categories.filter((c): c is AssessedCategory => c.assessed);
+export function assessedAreas(results: AuditResults): AssessedArea[] {
+  return results.areas.filter((a): a is AssessedArea => a.assessed);
 }
 
-// The short label for an area with no score. An area the free audit never reads says so; an area whose
-// findings could not be supported says that instead.
-export function notAssessedLabel(category: UnassessedCategory): string {
-  return category.key ? 'Left out: findings not supported' : NOT_ASSESSED_LABEL;
+// The short label for an area with no score.
+export function notAssessedLabel(area: UnassessedArea): string {
+  return area.reason === NOT_MEASURED_SENTENCE ? 'Not measured' : NOT_ASSESSED_LABEL;
 }
 
-// "the four areas read", "the one area read"
-export function areasReadPhrase(results: AuditResults): string {
-  const count = assessedCategories(results).length;
-  return `the ${NUMBER_WORDS[count] ?? String(count)} ${count === 1 ? 'area' : 'areas'} read`;
+// "the four areas assessed", "the one area assessed"
+export function areasAssessedPhrase(results: AuditResults): string {
+  const count = assessedAreas(results).length;
+  return `the ${NUMBER_WORDS[count] ?? String(count)} ${count === 1 ? 'area' : 'areas'} assessed`;
 }
 
-// "Score for the four areas read: 7.2 of 10"
+// "Score for the four areas assessed: 7.2 of 10"
 export function scoreLine(results: AuditResults): string {
-  return `Score for ${areasReadPhrase(results)}: ${results.overallScore.toFixed(1)} of 10`;
+  return `Score for ${areasAssessedPhrase(results)}: ${results.overallScore.toFixed(1)} of 10`;
 }
 
 // The page's path on its site ("/" for the homepage). Falls back to the text given.
@@ -37,28 +36,62 @@ export function pagePath(pageUrl: string): string {
   }
 }
 
-// On /about: “the words quoted”      or      Looked for: a meta description, not found on /about
-// The "Looked for" line is only ever built from a fact the code computed (run-audit.ts turns a fact id into
-// `absent`); the model cannot write one.
+// THE FOUR LEAD-INS. Every finding, strength and fix in a report is printed with exactly one of these, so the
+// reader knows what kind of support it has: the page's own words, something our software counted or was given as
+// a measurement, something our software looked for and did not find, or the AI model's reading of a screenshot
+// (the one kind our software cannot check).
+export const LEAD_IN_QUOTE = 'Your page says:';
+export const LEAD_IN_MEASURED = 'Measured:';
+export const LEAD_IN_ABSENT = 'Looked for on the pages read, not found:';
+export const LEAD_IN_SCREEN = 'Seen in the phone screenshot:';
+export const LEAD_INS = [LEAD_IN_QUOTE, LEAD_IN_MEASURED, LEAD_IN_ABSENT, LEAD_IN_SCREEN] as const;
+// what follows the screenshot lead-in: written here, because there is nothing of the model's to check and print
+export const SCREEN_NOTE = 'our software cannot check this one; it rests on the AI model reading the picture.';
+
+// Your page says: “the words quoted” (on /about)
+// Measured: 3 of the 18 links we checked on your own site answered with an error
+// Looked for on the pages read, not found: a link to a privacy policy
+// Seen in the phone screenshot: our software cannot check this one; ...
+// The words after the "not found" and "Measured" lead-ins are written by our code (facts.ts) or come from a
+// measurement that was passed in. The model cannot write either.
 export function evidenceLine(evidence: Evidence): string {
-  if ('quote' in evidence) return `On ${pagePath(evidence.pageUrl)}: “${evidence.quote}”`;
-  const where = evidence.siteWide ? 'any page read' : pagePath(evidence.pageUrl);
-  return `Looked for: ${evidence.absent}, not found on ${where}`;
+  switch (evidence.kind) {
+    case 'quote':
+      return `${LEAD_IN_QUOTE} “${evidence.quote}” (on ${pagePath(evidence.pageUrl)})`;
+    case 'measured':
+      return `${LEAD_IN_MEASURED} ${evidence.text}`;
+    case 'absent':
+      return `${LEAD_IN_ABSENT} ${evidence.label}`;
+    case 'screen':
+      return `${LEAD_IN_SCREEN} ${SCREEN_NOTE}`;
+  }
+}
+
+// "Effort: An afternoon. You can do this yourself."
+export function effortLine(fix: Fix): string {
+  return `Effort: ${EFFORT_LABELS[fix.effort]}. ${fix.selfServe ? 'You can do this yourself.' : 'This one is likely to need someone who builds websites.'}`;
 }
 
 export const HOW_MADE_HEADING = 'How this was made and what it does not cover';
 
 export function howMadeText(results: AuditResults): string {
   const pages = results.pagesRead.length;
-  const notCovered = UNASSESSED_CATEGORIES.join(', ');
+  const speed = results.areas.find((a) => a.key === 'speed');
+  const hasScreen = results.phoneCallouts.length > 0 || results.areas.some((a) => a.assessed && a.findings.some((f) => f.evidence.kind === 'screen'));
   return (
-    `This report was produced automatically. Our software read the text of ${pages} public ${pages === 1 ? 'page' : 'pages'} of your site, ` +
-    'and an AI model wrote the findings from that text. Each finding, strength and priority issue shows the words from your page that it rests on, ' +
-    'or what our software looked for in the page and did not find, so you can check it yourself. ' +
+    `This report was produced automatically. Our software read the text of ${pages} public ${pages === 1 ? 'page' : 'pages'} of your site (it reads at most eleven), ` +
+    'and an AI model wrote the findings from that text. Each finding, fix and strength says what it rests on: your page\'s own words, ' +
+    'something our software counted, or something our software looked for on the pages read and did not find, so you can check it yourself. ' +
     'Our software removed any finding whose quoted words it could not find on the page. ' +
     'Text the page hides in its own markup is not read. ' +
-    `The score covers ${areasReadPhrase(results)} only. ` +
-    `It does not cover ${notCovered}: those need the page rendered in a browser, which the full review includes. ` +
-    'It does not compare your site with competitors, and no person has reviewed it.'
+    (results.linksChecked > 0
+      ? `Our software asked ${results.linksChecked} ${results.linksChecked === 1 ? 'link' : 'links'} on your own site whether ${results.linksChecked === 1 ? 'it answers' : 'they answer'}; links to other sites were not checked. `
+      : 'Links were not checked. ') +
+    (speed && !speed.assessed && speed.reason === NOT_MEASURED_SENTENCE ? 'Loading speed was not measured, so Speed has no score. ' : '') +
+    (hasScreen
+      ? 'Findings marked as seen in the phone screenshot rest on the AI model reading the picture; our software cannot check those. '
+      : 'No picture of your site was taken: First impression is judged from the opening text of your home page only. ') +
+    `The score covers ${areasAssessedPhrase(results)} only. ` +
+    'It does not cover your visitor numbers, where you rank in search, your competitors, or anything behind a login. No person has reviewed it.'
   );
 }
