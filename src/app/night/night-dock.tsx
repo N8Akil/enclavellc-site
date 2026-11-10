@@ -2,23 +2,37 @@
 
 import { useEffect, useState } from 'react'
 
-// The audit stays one tap away for the length of the page: a slim bar that comes up once the opening shot (and its
-// form) has scrolled off, and steps aside again when the forms at the end are on screen.
+// The audit stays one tap away for the length of the page: a slim bar that comes up once the opening shot and the
+// report section (each with its own audit button) have scrolled off, and steps aside whenever the coverage slate or
+// the forms at the end are on screen, so it never sits on another call to action.
 export function NightDock() {
   const [show, setShow] = useState(false)
 
   useEffect(() => {
-    const hero = document.getElementById('audit-hero'); const end = document.getElementById('book')
-    const slip = document.querySelector('.nc .slip')   // the coverage slate has its own button: don't sit on it
-    if (!hero || !end || !('IntersectionObserver' in window)) return
-    const seen = new Map<Element, boolean>()
-    const io = new IntersectionObserver((es) => {
-      es.forEach((e) => seen.set(e.target, e.isIntersecting))
-      const pastHero = hero.getBoundingClientRect().bottom < 0
-      setShow(pastHero && !seen.get(hero) && !seen.get(end) && !(slip && seen.get(slip)))
-    }, { rootMargin: '0px 0px -80px 0px' })
-    io.observe(hero); io.observe(end); if (slip) io.observe(slip)
-    return () => io.disconnect()
+    const gate = document.getElementById('report') ?? document.getElementById('audit-hero')
+    const end = document.getElementById('book')
+    const slip = document.querySelector('.nc .slip')
+    if (!gate || !end) return
+
+    const onScreen = (el: Element | null) => {
+      if (!el) return false
+      const r = el.getBoundingClientRect()
+      return r.top < innerHeight - 80 && r.bottom > 0
+    }
+    let frame = 0
+    const read = () => {
+      frame = 0
+      setShow(gate.getBoundingClientRect().bottom < innerHeight * 0.4 && !onScreen(end) && !onScreen(slip))
+    }
+    const queue = () => { if (!frame) frame = requestAnimationFrame(read) }
+    read()
+    window.addEventListener('scroll', queue, { passive: true })
+    window.addEventListener('resize', queue)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', queue)
+      window.removeEventListener('resize', queue)
+    }
   }, [])
 
   const toAudit = () => {

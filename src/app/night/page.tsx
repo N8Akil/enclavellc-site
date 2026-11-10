@@ -9,6 +9,7 @@ import { NightCrewMotion } from './night-crew-motion'
 import { NightAuditForm, NightBook } from './night-forms'
 import { NightCoverage } from './night-coverage'
 import { NightDock } from './night-dock'
+import { NightClock } from './night-clock'
 import './night.css'
 
 // Preview of the new home page (concept D · Night Crew). Not linked from anywhere and kept out of search.
@@ -68,7 +69,7 @@ export default function NightPage() {
       <header className="top">
         <div className="wrap">
           <a className="brand" href="#top" aria-label="Enclave, home"><span className="mark" aria-hidden="true"></span><span>Enclave</span></a>
-          <nav className="nav" aria-label="Main"><a href="#crew">The crew</a><a href="#sheet">Call sheet</a><a href="#make">What we make</a><a href="#work">Now showing</a></nav>
+          <nav className="nav" aria-label="Main"><a href="#report">The free audit</a><a href="#crew">The crew</a><a href="#make">What we make</a><a href="#work">Now showing</a></nav>
           <div className="tools">
             <span className="rec mono" id="rec" aria-hidden="true"><i></i><span id="recTxt">Rolling</span></span>
             <button className="theme" id="theme" type="button" aria-label="Switch to the day set"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="12" cy="12" r="4.5" /><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" /></svg><span id="themeLabel">Day</span></button>
@@ -88,6 +89,7 @@ export default function NightPage() {
               <div>
                 <p className="sub">Your website, your follow-up and your content keep working after you close. One founder, six AI partners, one studio.</p>
                 <NightAuditForm variant="hero" />
+                <NightClock />
               </div>
             </div>
           </div>
@@ -127,8 +129,31 @@ export default function NightPage() {
           </div>
         </section>
 
-        <section className="sec" id="crew" aria-labelledby="crew-h">
-          <div className="wrap"><div className="head rv"><SecSlate scene="02" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p>Scroll and each one steps into the light, starting with the director. The monitor shows the kind of work they do for you; it is an illustration, not live data.</p></div></div>
+        <section className="sec report-sec" id="report" aria-labelledby="report-h">
+          <div className="wrap">
+            <div className="head rv"><SecSlate scene="02" loc="The report" /><h2 className="h2" id="report-h">What the audit hands you</h2><p>The free audit is a written report, sent to your inbox as a document you can forward. It is generated automatically from your site&apos;s public pages. Here is what is inside.</p></div>
+            <div className="report rv">
+              <div className="sheet" aria-hidden="true">
+                <span className="mono">Enclave · website audit report</span>
+                <strong>yourbusiness.com</strong>
+                <span className="score"><b>?</b><em>/10</em></span>
+                <span className="mono">Overall score · yours to find out</span>
+              </div>
+              <ol className="toc">
+                <li><h3>Executive summary</h3><p>Where your site stands, in plain language.</p></li>
+                <li><h3>Score breakdown</h3><p>An overall score out of 10, and a score for each area checked.</p></li>
+                <li><h3>Top strengths</h3><p>What is already working, so you keep it.</p></li>
+                <li><h3>Priority issues</h3><p>What needs fixing, most urgent first, and what each one is costing you.</p></li>
+                <li><h3>Detailed analysis</h3><p>What was found and what is recommended, area by area.</p></li>
+                <li><h3>Action plan</h3><p>Quick wins for this week, then one to four weeks, then one to three months.</p></li>
+              </ol>
+            </div>
+            <div className="report-go"><a className="btn gold" href="#audit">Send my web address</a><span className="mono">Free · in your inbox in a few minutes</span></div>
+          </div>
+        </section>
+
+        <section className="sec flush" id="crew" aria-labelledby="crew-h">
+          <div className="wrap"><div className="head rv"><SecSlate scene="03" loc="Stage A" /><h2 className="h2" id="crew-h">Each partner owns one craft.</h2><p>Scroll and each one steps into the light, starting with the director. The monitor shows the kind of work they do for you; it is an illustration, not live data.</p></div></div>
           <div className="crew-track" id="crewTrack" style={css({ '--n': crew.length })}>
             <div className="crew-pin wrap" id="crewPin">
               <nav className="names" aria-label="Scenes">
@@ -158,28 +183,6 @@ export default function NightPage() {
           <div className="wrap"><p className="joining mono">Also on the call sheet: Naunet and Amaunet. Their portraits are still being shot.</p></div>
         </section>
 
-        <section className="sec flush" id="sheet" aria-labelledby="sheet-h">
-          <div className="wrap">
-            <div className="head rv"><SecSlate scene="03" loc="Production office" /><h2 className="h2" id="sheet-h">The call sheet</h2><p>On a film set, the call sheet tells everyone who is working, what they handle and when to show up. Here is ours.</p></div>
-            <div className="table-box rv" tabIndex={0} role="region" aria-label="Call sheet table, scrolls sideways">
-              <table>
-                <thead><tr><th scope="col">Crew</th><th scope="col">Department</th><th scope="col">Call time</th><th scope="col">Handles</th></tr></thead>
-                <tbody>
-                  <tr className="founder-row"><td>Nate</td><td>Director</td><td><span className="call">Your hours</span></td><td>Every call with you, every decision, final approval. You always talk to a person.</td></tr>
-                  <tr><td>Isis</td><td>Art department</td><td><span className="call">After hours too</span></td><td>Design and build: sites, native iPhone apps, brand, and pages that turn visitors into calls.</td></tr>
-                  <tr><td>Thoth</td><td>Engineering</td><td><span className="call">After hours too</span></td><td>Forms, bookings, follow-up and the connections between your tools.</td></tr>
-                  <tr><td>Ra</td><td>Operations</td><td><span className="call">After hours too</span></td><td>Hosting, security, backups and keeping everything online.</td></tr>
-                  <tr><td>Horus</td><td>Publicity</td><td><span className="call">On schedule</span></td><td>Posts, short videos, newsletters and replies in your voice.</td></tr>
-                  <tr><td>Osiris</td><td>Continuity</td><td><span className="call">Before every release</span></td><td>Checks every page, link and word before your customers see it.</td></tr>
-                  <tr><td>Amun</td><td>Production</td><td><span className="call">At kickoff</span></td><td>The plan, the milestones and one price agreed up front.</td></tr>
-                  <tr className="pending"><td>Naunet</td><td><span className="stamp sm">Coming soon</span></td><td><span className="call">Soon</span></td><td></td></tr>
-                  <tr className="pending"><td>Amaunet</td><td><span className="stamp sm">Coming soon</span></td><td><span className="call">Soon</span></td><td></td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-
         <section className="sec flush" id="make" aria-labelledby="make-h">
           <div className="wrap">
             <div className="head rv"><SecSlate scene="04" loc="Coverage" /><h2 className="h2" id="make-h">What we make</h2><p>Start with the free audit. Then tap the pieces you want and book a call about exactly those.</p></div>
@@ -202,12 +205,7 @@ export default function NightPage() {
 
         <section className="sec flush" id="work" aria-labelledby="work-h">
           <div className="wrap">
-            <div className="head rv"><SecSlate scene="06" loc="Screening room" /><h2 className="h2" id="work-h">Now showing</h2><p>Every project is shown with the client&apos;s written permission.</p></div>
-            <div className="work rv">
-              <div className="slot big"><span className="mono">Our build · Enclave Landscape Management</span><strong>ELM</strong><span className="stamp">Coming soon</span></div>
-              <div className="slot"><span className="mono">Our build · quality control</span><strong>EnclaveQC</strong><span className="stamp sm">Coming soon</span></div>
-              <div className="slot"><span className="mono">Our build · the platform</span><strong>iEnclave</strong><span className="stamp sm">Coming soon</span></div>
-            </div>
+            <div className="head rv"><SecSlate scene="06" loc="Screening room" /><h2 className="h2" id="work-h">Now showing</h2><p>Our own builds, in production now. Client work appears here only with the client&apos;s written permission.</p></div>
             <div className="ventures rv" role="group" aria-label="What the crew is building next">
               <div className="venture"><span className="dot build mono">In production</span><h3>Enclave Landscape Management</h3><span className="stamp sm">Under construction</span></div>
               <div className="venture"><span className="dot build mono">In production · target Jan 2027</span><h3>EnclaveQC</h3><span className="stamp sm">Under construction</span></div>
