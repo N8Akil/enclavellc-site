@@ -8,7 +8,9 @@ vi.mock('resend', () => ({
   },
 }))
 
+import { NOT_ASSESSED_SENTENCE, UNASSESSED_CATEGORIES, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
 import { sendAuditEmails } from '@/lib/audit/send-emails'
+import type { AuditResults } from '@/lib/audit/types'
 
 const options = () => ({
   document: Buffer.from('docx'),
@@ -72,8 +74,8 @@ describe('sendAuditEmails', () => {
     const evilUrl = 'https://inject.example.test/?q="><script>alert(2)</script>&r=<a href=x>'
     const evilAudit = {
       ...auditFixture,
-      topStrengths: [{ title: '<a href=x>strength</a>', description: '' }],
-      criticalIssues: [{ title: '"><script>alert(3)</script>', description: '', impact: '' }],
+      topStrengths: [{ title: '<a href=x>strength</a>', description: '', evidence: { pageUrl: `${SITE}/`, quote: '<a href=x>quoted</a> "><script>alert(4)</script>' } }],
+      criticalIssues: [{ title: '"><script>alert(3)</script>', description: '', impact: '', evidence: auditFixture.criticalIssues[0].evidence }],
       categories: [{ ...auditFixture.categories[0], name: '<a href=x>cat</a>' }],
     }
     await sendAuditEmails({ ...options(), userName: evilName, websiteUrl: evilUrl, userEmail: 'zed"><script>@example.test', auditResults: evilAudit })
@@ -85,6 +87,121 @@ describe('sendAuditEmails', () => {
       expect(mail.html).toContain('&lt;script&gt;')
       expect(mail.html).toContain('&lt;a href=x&gt;')
     }
+  })
+
+  describe('the new result shape', () => {
+    const SCORE_LINE = 'Score for the two areas read: 6.4 of 10'
+    const shaped = (): AuditResults => ({
+      ...auditFixture,
+      categories: [
+        auditFixture.categories[0],
+        { key: 'seo', name: 'SEO Fundamentals', assessed: true, score: 7, status: 'Good', weight: 0.25, findings: [], recommendations: [] },
+        { key: 'trust_signals', name: 'Trust Signals', assessed: false, reason: UNSUPPORTED_SENTENCE },
+        ...UNASSESSED_CATEGORIES.map((name) => ({ name, assessed: false as const, reason: NOT_ASSESSED_SENTENCE })),
+      ],
+      criticalIssues: [
+        { title: 'Loud banner', description: 'd', impact: 'i', evidence: { pageUrl: `${SITE}/offers`, quote: 'Save <script>alert("now")</script> today' } },
+        { title: 'No description', description: 'd', impact: 'i', evidence: { pageUrl: `${SITE}/about`, absent: 'a meta description' } },
+      ],
+      droppedFindings: 3,
+    })
+    const li = (html: string, name: string) => html.split('<li>').find((item) => item.startsWith(`<strong>${name}:</strong>`)) ?? ''
+
+    it('an area that was not assessed shows the fixed sentence and no score, in the visitor email', async () => {
+      send.mockResolvedValue(resendOk())
+      await sendAuditEmails({ ...options(), auditResults: shaped() })
+      const html: string = send.mock.calls[0][0].html
+
+      expect(li(html, 'Content Quality')).toContain('6 of 10')
+      expect(li(html, 'SEO Fundamentals')).toContain('7 of 10')
+      for (const name of UNASSESSED_CATEGORIES) {
+        const item = li(html, name.replace('&', '&amp;'))
+        expect(item, name).toContain(NOT_ASSESSED_SENTENCE)
+        expect(item, name).not.toMatch(/\d\s*(\/|of)\s*10/)
+      }
+      const leftOut = li(html, 'Trust Signals')
+      expect(leftOut).toContain(UNSUPPORTED_SENTENCE)
+      expect(leftOut).not.toMatch(/\d\s*(\/|of)\s*10/)
+      expect(html).not.toMatch(/>\s*0(\.0)?\s*(\/|of)\s*10/)
+      expect(html).not.toContain('undefined')
+      expect(html).not.toContain('NaN')
+
+      // the score is labelled as covering the assessed areas only, and the old "8 key areas" claim is gone
+      expect(html).toContain(SCORE_LINE)
+      expect(html).not.toMatch(/Overall Score|8 key areas/)
+      expect(html).toContain('How this was made and what it does not cover')
+      expect(html).toContain('It does not compare your site with competitors')
+    })
+
+    it('a quote containing <script> or a double quote is escaped, and shown with its page path', async () => {
+      send.mockResolvedValue(resendOk())
+      await sendAuditEmails({ ...options(), auditResults: shaped() })
+      const html: string = send.mock.calls[0][0].html
+      expect(html).toContain('On /offers: \u201CSave &lt;script&gt;alert(&quot;now&quot;)&lt;/script&gt; today\u201D')
+      expect(html).toContain('Looked for: a meta description, not found on /about')
+      for (const [mail] of send.mock.calls) {
+        expect(mail.html).not.toContain('<script')
+        expect(mail.html).not.toContain('alert("now")')
+      }
+    })
+
+    it('[2e] the visitor email prints the evidence beside every strength and every priority issue it lists', async () => {
+      send.mockResolvedValue(resendOk())
+      const results = shaped()
+      results.topStrengths = [
+        { title: 'Clear offer', description: 'd', evidence: { pageUrl: `${SITE}/services`, quote: 'We fix leaks & drains across the county' } },
+        { title: 'Has a title', description: 'd', evidence: { pageUrl: `${SITE}/`, quote: 'Plumbers you can <b>trust</b> in Dayton' } },
+      ]
+      await sendAuditEmails({ ...options(), auditResults: results })
+      const html: string = send.mock.calls[0][0].html
+      const li = (title: string) => html.split('<li>').find((item) => item.startsWith(title)) ?? ''
+      expect(li('Clear offer')).toContain('On /services: \u201CWe fix leaks &amp; drains across the county\u201D')
+      expect(li('Has a title')).toContain('On /: \u201CPlumbers you can &lt;b&gt;trust&lt;/b&gt; in Dayton\u201D')
+      expect(li('Loud banner')).toContain('On /offers: \u201CSave &lt;script&gt;')
+      expect(li('No description')).toContain('Looked for: a meta description, not found on /about')
+      expect(html).not.toContain('<b>trust</b>')
+    })
+
+    it('[7d] neither email makes a link out of the visitor\'s URL: it is shown as text only', async () => {
+      send.mockResolvedValue(resendOk())
+      const url = 'https://pii-site.example.test/a-path-the-visitor-chose'
+      await sendAuditEmails({ ...options(), websiteUrl: url, auditResults: shaped() })
+      expect(send).toHaveBeenCalledTimes(2)
+      for (const [mail] of send.mock.calls) {
+        expect(mail.html).toContain(url)
+        const hrefs = [...(mail.html as string).matchAll(/href\s*=\s*["']([^"']*)["']/gi)].map((m) => m[1])
+        for (const href of hrefs) {
+          expect(href).not.toContain('pii-site')
+          expect(href).toMatch(/^(https:\/\/enclavellc\.net(\/|$)|mailto:)/)
+        }
+        expect(mail.html).not.toMatch(/<a\b[^>]*>[^<]*pii-site/i)
+      }
+      // the admin email still shows the address, as words
+      expect(send.mock.calls[1][0].html).toMatch(/<strong>Website:<\/strong>\s*https:\/\/pii-site\.example\.test\/a-path-the-visitor-chose/)
+    })
+
+    it('the admin email ranks only assessed areas and says what the score covers', async () => {
+      send.mockResolvedValue(resendOk())
+      await sendAuditEmails({ ...options(), auditResults: shaped() })
+      const html: string = send.mock.calls[1][0].html
+      expect(html).toContain('<strong>Highest Score:</strong> SEO Fundamentals (7)')
+      expect(html).toContain('<strong>Lowest Score:</strong> Content Quality (6)')
+      expect(html).toContain('<strong>Score covers:</strong> the two areas read')
+      expect(html).toContain('Visual Design &amp; Branding')
+      expect(html).toContain('<strong>Findings removed (evidence did not check out):</strong> 3')
+    })
+
+    it('no exclamation mark was added: the only ones left are the three in the copy that was already there', async () => {
+      send.mockResolvedValue(resendOk())
+      await sendAuditEmails({ ...options(), auditResults: shaped() })
+      const [[visitorMail], [adminMail]] = send.mock.calls
+      const visible = (html: string) => html.replace('<!DOCTYPE html>', '').replace(/<!--[\s\S]*?-->/g, '')
+      const visitorText = `${visitorMail.subject}\n${visible(visitorMail.html)}`
+      const existing = ['is Ready!', 'Your Website Audit is Ready!', 'Great news!']
+      expect(visitorText.split('!').length - 1).toBe(existing.length)
+      for (const phrase of existing) expect(visitorText).toContain(phrase)
+      expect(`${adminMail.subject}\n${visible(adminMail.html)}`).not.toContain('!')
+    })
   })
 
   it('fails when a send throws, without logging what it threw', async () => {

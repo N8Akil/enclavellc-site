@@ -50,7 +50,7 @@ export function NightCoverage() {
   return (
     <>
       <div className="coverage rv">
-        <article className="cov first"><span className="mono">Start here · free</span><h3>Site audit</h3><p>Send your web address and get a plain-language report on what is working and what is costing you customers.</p><a href="#audit">Send your web address</a><span className="who mono">Automatic · a few minutes</span></article>
+        <article className="cov first"><span className="mono">Start here · free</span><h3>Site audit</h3><p>Send your web address and get a plain-language report on what is working and what is costing you customers.</p><a href="#audit">Send your web address</a><span className="who mono">Sent by email</span></article>
         {pieces.map((p) => {
           const sel = on.includes(p.id)
           return (

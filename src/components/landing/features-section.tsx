@@ -54,7 +54,7 @@ export function FeaturesSection() {
                             </li>
                             <li className="flex items-start gap-2">
                                 <span className="text-orange-500 mt-1">•</span>
-                                <span>In your inbox in 2-3 minutes</span>
+                                <span>Sent to your inbox</span>
                             </li>
                         </ul>
                         <span className="text-orange-500 text-sm font-medium group-hover:underline">Get Yours Now →</span>
