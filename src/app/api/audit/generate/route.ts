@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { fetchWebsiteContent, validateUrl } from '@/lib/audit/fetch-website';
 import { runAudit } from '@/lib/audit/run-audit';
+import { auditLimiter, CEILING_LEAD_MESSAGE, clientIp, RATE_LIMIT_MESSAGES } from '@/lib/audit/limits';
+import { CEILING_LEAD_LINE, isPreviewEmail, PREVIEW_LEAD_LINE, PREVIEW_MESSAGE, sendPreviewLead } from '@/lib/audit/preview';
 import { generateAuditDocument } from '@/lib/audit/generate-document';
 import { sendAuditEmails } from '@/lib/audit/send-emails';
 import type { AuditResults } from '@/lib/audit/types';
@@ -54,6 +56,93 @@ export async function POST(request: NextRequest) {
     // from here on only the server's normalised URL is used, and it is never logged
     const siteUrl = urlValidation.url;
 
+    // Limits come BEFORE anything that costs: no page is requested and no model is called for a refused
+    // request. An allowed attempt is counted here, so a request that fails later still used its turn.
+    // The per-person and hourly limits apply to every request. The day's AUDIT ceiling is taken only by a request
+    // that would actually run an audit (an address on the preview list): a lead spends nothing and must not use it.
+    const listed = isPreviewEmail(userEmail);
+    const limit = auditLimiter.check(clientIp(request.headers), userEmail, { audit: listed });
+    // the audit ceiling is used up (or the limiter failed closed): the request becomes a lead, below
+    const ceilingHit = !limit.allowed && limit.cause === 'daily';
+    if (!limit.allowed && !ceilingHit) {
+      // the cause is a fixed word; nothing about the caller is logged
+      console.warn(`[Audit] ${requestId} rate limited: ${limit.cause}`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'RATE_LIMITED',
+          message: RATE_LIMIT_MESSAGES[limit.cause],
+        },
+        {
+          status: 429,
+          headers: limit.retryAfterSeconds ? { 'Retry-After': String(limit.retryAfterSeconds) } : undefined,
+        }
+      );
+    }
+
+    // PREVIEW GATE. Unless this address is on the preview list, nothing automated runs: no page is requested,
+    // no model is called, no document is made. The request becomes a lead for a person to run by hand.
+    // An unset or empty list means nobody is on it. This path needs the email key only.
+    // The same happens to a listed address once today's audit ceiling is used up: the visitor's request still
+    // reaches a person. Lead emails have their own daily cap (limits.ts takeLead), so the form cannot flood an inbox.
+    if (!listed || ceilingHit) {
+      if (!auditLimiter.takeLead()) {
+        console.warn(`[Audit] ${requestId} rate limited: lead cap`);
+        return NextResponse.json(
+          { success: false, error: 'RATE_LIMITED', message: RATE_LIMIT_MESSAGES.daily },
+          {
+            status: 429,
+            headers: !limit.allowed && limit.retryAfterSeconds ? { 'Retry-After': String(limit.retryAfterSeconds) } : undefined,
+          }
+        );
+      }
+      if (!process.env.RESEND_API_KEY) {
+        console.error(`[Audit] ${requestId} config missing: RESEND_API_KEY`);
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'CONFIG_ERROR',
+            message: 'Service temporarily unavailable. Please contact n.garrett@enclavellc.net or try again later.',
+            requestId,
+          },
+          { status: 500 }
+        );
+      }
+      console.log(`[Audit] ${requestId} ${ceilingHit ? 'ceiling' : 'preview'}: sending lead`);
+      const lead = await sendPreviewLead({
+        userEmail,
+        userName,
+        websiteUrl: siteUrl,
+        line: ceilingHit ? CEILING_LEAD_LINE : PREVIEW_LEAD_LINE,
+        adminEmail: process.env.ADMIN_EMAIL || 'n.garrett@enclavellc.net',
+      });
+      if (!lead.sent) {
+        // nobody knows the visitor asked: say so, and give them the address
+        console.error(`[Audit] ${requestId} preview lead failed: ${lead.error}`);
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'EMAIL_FAILED',
+            message: 'We could not pass your request on. Please contact n.garrett@enclavellc.net.',
+            requestId,
+          },
+          { status: 502 }
+        );
+      }
+      if (ceilingHit) {
+        // not run today, and the visitor is told so; the lead is with a person, so they need do nothing more
+        console.warn(`[Audit] ${requestId} rate limited: daily (lead passed on)`);
+        return NextResponse.json(
+          { success: false, error: 'RATE_LIMITED', leadSent: true, message: CEILING_LEAD_MESSAGE },
+          {
+            status: 429,
+            headers: !limit.allowed && limit.retryAfterSeconds ? { 'Retry-After': String(limit.retryAfterSeconds) } : undefined,
+          }
+        );
+      }
+      return NextResponse.json({ success: true, preview: true, message: PREVIEW_MESSAGE }, { status: 202 });
+    }
+
     // Check for required environment variables
     if (!process.env.ANTHROPIC_API_KEY) {
       console.error(`[Audit] ${requestId} config missing: ANTHROPIC_API_KEY`);
@@ -87,6 +176,8 @@ export async function POST(request: NextRequest) {
     try {
       websiteContent = await fetchWebsiteContent(siteUrl);
     } catch (fetchError) {
+      // An unreachable site and a refused address get the SAME answer: the caller is not told why an
+      // address was refused, and it is not echoed. The log line carries the guard's code only.
       console.error(`[Audit] ${requestId} fetch failed: ${errorCode(fetchError)}`);
       return NextResponse.json(
         {
@@ -100,10 +191,12 @@ export async function POST(request: NextRequest) {
 
     // Step 2: Run AI audit
     console.log(`[Audit] ${requestId} running analysis`);
-    const auditResult = await runAudit(websiteContent, siteUrl, {
-      businessType,
-      priorityAreas,
-    });
+    const auditResult = await runAudit(
+      websiteContent,
+      siteUrl,
+      { businessType, priorityAreas },
+      { requestId }
+    );
 
     if (!auditResult.success) {
       return NextResponse.json(
@@ -185,6 +278,6 @@ export async function GET() {
   return NextResponse.json({
     status: 'ok',
     service: 'Website Audit API',
-    version: '1.0.0',
+    version: '2.0.0',
   });
 }

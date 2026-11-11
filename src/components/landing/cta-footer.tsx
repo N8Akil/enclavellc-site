@@ -92,7 +92,7 @@ export function CTAFooter() {
 
                         <p className="mt-4 text-sm text-neutral-500">
                             {activeTab === 'audit'
-                                ? "📬 Professional .docx report delivered to your inbox in 2-3 minutes."
+                                ? "📬 A written report, sent to your inbox."
                                 : "Response time: within 1 business day."}
                         </p>
                     </div>

@@ -27,6 +27,7 @@ type FormValues = z.infer<typeof schema>
 
 export function WebsiteAuditForm() {
     const [status, setStatus] = React.useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+    const [isPreview, setIsPreview] = React.useState(false)
     const [resultMessage, setResultMessage] = React.useState('')
 
     const {
@@ -60,8 +61,11 @@ export function WebsiteAuditForm() {
 
             if (data.success) {
                 setStatus('success')
-                setResultMessage(`Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
-                toast.success("Audit sent! Check your inbox.")
+                // while the free audit is in preview the API says what will really happen: show its words, not ours
+                const preview = data.preview === true && typeof data.message === 'string'
+                setIsPreview(preview)
+                setResultMessage(preview ? data.message : `Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
+                toast.success(preview ? "Request received." : "Audit sent! Check your inbox.")
                 reset()
             } else {
                 setStatus('error')
@@ -81,7 +85,7 @@ export function WebsiteAuditForm() {
                 <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-emerald-500/20 flex items-center justify-center">
                     <CheckCircle2 className="w-8 h-8 text-emerald-500" />
                 </div>
-                <h3 className="text-xl font-semibold text-white mb-2">Audit Sent!</h3>
+                <h3 className="text-xl font-semibold text-white mb-2">{isPreview ? 'Request received' : 'Audit Sent!'}</h3>
                 <p className="text-neutral-400 mb-6">{resultMessage}</p>
                 <button
                     onClick={() => {
@@ -153,7 +157,7 @@ export function WebsiteAuditForm() {
             </button>
 
             <p className="text-xs text-[color:var(--color-text-secondary)] text-center">
-                ⚡ AI-powered • Professional .docx report • Delivered in 2-3 minutes
+                Free • A written report • Sent to your inbox
             </p>
         </form>
     )
