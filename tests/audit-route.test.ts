@@ -13,12 +13,12 @@ vi.mock('@/lib/audit/fetch-website', async (importOriginal) => ({
   fetchWebsiteContent: vi.fn(async () => ({ pages: [] })),
 }))
 vi.mock('@/lib/audit/run-audit', () => ({ runAudit: vi.fn(async () => auditFixture) }))
-vi.mock('@/lib/audit/generate-document', () => ({ generateAuditDocument: vi.fn(async () => Buffer.from('docx')) }))
+vi.mock('@/lib/audit/generate-pdf', () => ({ generateAuditPdf: vi.fn(async () => Buffer.from('%PDF-')) }))
 
 import { POST } from '@/app/api/audit/generate/route'
 import { fetchWebsiteContent } from '@/lib/audit/fetch-website'
 import { runAudit } from '@/lib/audit/run-audit'
-import { generateAuditDocument } from '@/lib/audit/generate-document'
+import { generateAuditPdf } from '@/lib/audit/generate-pdf'
 import { setRunLater } from '@/lib/audit/background'
 import { auditLimiter } from '@/lib/audit/limits'
 import { auditQueue } from '@/lib/audit/queue'
@@ -41,7 +41,7 @@ const visitor = (n: number) => ({ ...body, userEmail: `visitor${n}@example.test`
 function expectNothingRan() {
   expect(vi.mocked(fetchWebsiteContent)).not.toHaveBeenCalled()
   expect(vi.mocked(runAudit)).not.toHaveBeenCalled()
-  expect(vi.mocked(generateAuditDocument)).not.toHaveBeenCalled()
+  expect(vi.mocked(generateAuditPdf)).not.toHaveBeenCalled()
 }
 
 // THE BACKGROUND RUN, under the test's control. The route hands its after-response work to runLater; here that
@@ -70,7 +70,7 @@ beforeEach(() => {
   send.mockReset()
   vi.mocked(runAudit).mockClear()
   vi.mocked(fetchWebsiteContent).mockClear()
-  vi.mocked(generateAuditDocument).mockClear()
+  vi.mocked(generateAuditPdf).mockClear()
   // the limiter and the queue live for the life of the process: start every test with empty counts
   auditLimiter.reset()
   auditQueue.reset()
@@ -100,7 +100,7 @@ describe('POST /api/audit/generate', () => {
       })
       vi.mocked(fetchWebsiteContent).mockImplementationOnce(async () => (order.push('fetch'), { pages: [] }))
       vi.mocked(runAudit).mockImplementationOnce(async () => (order.push('model'), auditFixture))
-      vi.mocked(generateAuditDocument).mockImplementationOnce(async () => (order.push('document'), Buffer.from('docx')))
+      vi.mocked(generateAuditPdf).mockImplementationOnce(async () => (order.push('document'), Buffer.from('%PDF-')))
 
       const res = await POST(postJson(URL_, body))
       order.push('ANSWERED')
@@ -206,7 +206,7 @@ describe('POST /api/audit/generate', () => {
       ['the site cannot be read (unreachable)', () => vi.mocked(fetchWebsiteContent).mockRejectedValueOnce(new Error(`getaddrinfo ENOTFOUND ${SITE}`)), 'fetch: Error'],
       ['the model gives no usable audit', () => vi.mocked(runAudit).mockResolvedValueOnce({ success: false, error: 'AUDIT_FAILED', message: 'x', websiteUrl: SITE }), 'model: StageFailure AUDIT_FAILED'],
       ['the model step throws', () => vi.mocked(runAudit).mockRejectedValueOnce(new RangeError(`bad ${SITE} ${LEAD.email}`)), 'model: RangeError'],
-      ['the document cannot be made', () => vi.mocked(generateAuditDocument).mockRejectedValueOnce(new TypeError(`cannot render ${SITE} for ${LEAD.email}`)), 'document: TypeError'],
+      ['the document cannot be made', () => vi.mocked(generateAuditPdf).mockRejectedValueOnce(new TypeError(`cannot render ${SITE} for ${LEAD.email}`)), 'document: TypeError'],
     ])('%s: exactly one failure mail to the visitor and one to the admin with the code', async (_, arrange, code) => {
       send.mockResolvedValue(resendOk())
       arrange()
@@ -415,7 +415,7 @@ describe('POST /api/audit/generate', () => {
       expect(send).toHaveBeenCalledTimes(3)
       expect(send.mock.calls[0][0].html).toContain(normalised)
       expect(send.mock.calls[1][0].subject).toContain(normalised)
-      expect(send.mock.calls[1][0].attachments[0].filename).toMatch(/^Website-Audit-httppii-site\.example\.test-/)
+      expect(send.mock.calls[1][0].attachments[0].filename).toBe('httppii-site.example.test-website-audit.pdf')
       expectNoPii(logs, { includeLog: true })
     })
 
@@ -556,7 +556,7 @@ describe('POST /api/audit/generate', () => {
       for (let i = 0; i < 3; i++) expect((await post(postJson(URL_, body, from('203.0.113.9')))).status).toBe(202)
       vi.mocked(fetchWebsiteContent).mockClear()
       vi.mocked(runAudit).mockClear()
-      vi.mocked(generateAuditDocument).mockClear()
+      vi.mocked(generateAuditPdf).mockClear()
       send.mockClear()
 
       expect(await expect429(await post(postJson(URL_, body, from('203.0.113.9'))), TOO_MANY)).toBe(3600)
@@ -613,7 +613,7 @@ describe('POST /api/audit/generate', () => {
       for (let i = 0; i < 5; i++) expect((await post(postJson(URL_, body, from(`203.0.113.${i}`)))).status).toBe(202)
       vi.mocked(fetchWebsiteContent).mockClear()
       vi.mocked(runAudit).mockClear()
-      vi.mocked(generateAuditDocument).mockClear()
+      vi.mocked(generateAuditPdf).mockClear()
       const retryAfter = await expect429(await post(postJson(URL_, { ...body, userEmail: LEAD.email.toUpperCase() }, from('203.0.113.200'))), TOO_MANY)
       expect(retryAfter).toBeGreaterThan(86_000)
       expectNothingRan()
@@ -790,7 +790,7 @@ describe('POST /api/audit/generate', () => {
       expect(await res.json()).toEqual({ success: true, accepted: true, message: ACCEPTED })
       expect(vi.mocked(fetchWebsiteContent)).toHaveBeenCalledTimes(1)
       expect(vi.mocked(runAudit)).toHaveBeenCalledTimes(1)
-      expect(vi.mocked(generateAuditDocument)).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(generateAuditPdf)).toHaveBeenCalledTimes(1)
       expect(mails()).toEqual([ACCEPT_MAIL, ...REPORT_MAILS])
     })
 

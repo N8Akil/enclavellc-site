@@ -90,7 +90,8 @@
   },
   "dependencies": {
     "npm": [
-      "docx",
+      "pdf-lib",
+      "@pdf-lib/fontkit",
       "zod",
       "resend"
     ],

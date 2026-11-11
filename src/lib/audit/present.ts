@@ -1,6 +1,6 @@
 // src/lib/audit/present.ts
-// Wording shared by the .docx report and the emails, so both say the same true things.
-// These return PLAIN TEXT. The email escapes it with escapeHtml; the .docx puts it in text runs.
+// Wording shared by the PDF report and the emails, so both say the same true things.
+// These return PLAIN TEXT. The email escapes it with escapeHtml; the PDF sets it as text.
 import { EFFORT_LABELS, NOT_ASSESSED_LABEL, NOT_MEASURED_SENTENCE } from './config';
 import type { AssessedArea, AuditResults, Evidence, Fix, UnassessedArea } from './types';
 

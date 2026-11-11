@@ -7,5 +7,5 @@ export { fetchWebsiteContent, validateUrl } from './fetch-website';
 export { safeFetchPage, isPublicAddress, UnsafeUrlError } from './safe-fetch';
 export { auditLimiter, clientIp } from './limits';
 export { runAudit } from './run-audit';
-export { generateAuditDocument } from './generate-document';
+export { generateAuditPdf } from './generate-pdf';
 export { sendAuditEmails } from './send-emails';

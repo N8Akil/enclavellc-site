@@ -4,7 +4,7 @@
 // Log lines carry the request id, the stage and an error code. Never the visitor's details, the site or its text.
 import type { Niche } from './config';
 import { fetchWebsiteContent } from './fetch-website';
-import { generateAuditDocument } from './generate-document';
+import { generateAuditPdf } from './generate-pdf';
 import { sendFailureMails, type Lead } from './notify';
 import { runAudit } from './run-audit';
 import { sendAuditEmails } from './send-emails';
@@ -24,7 +24,7 @@ export interface PipelineDeps {
   fetchSite?: typeof fetchWebsiteContent;
   measure?: (siteUrl: string) => Promise<Measurements>;
   audit?: typeof runAudit;
-  makeDocument?: typeof generateAuditDocument;
+  makeDocument?: typeof generateAuditPdf;
   sendReport?: typeof sendAuditEmails;
   sendFailure?: typeof sendFailureMails;
 }
@@ -74,7 +74,7 @@ export async function runAuditJob(job: AuditJob, deps: PipelineDeps = {}): Promi
 
     stage = 'document';
     console.log(`${tag} generating document`);
-    const document = await (deps.makeDocument ?? generateAuditDocument)(result as AuditResults, { userName: job.userName });
+    const document = await (deps.makeDocument ?? generateAuditPdf)(result as AuditResults, { userName: job.userName });
 
     stage = 'email';
     console.log(`${tag} sending emails`);

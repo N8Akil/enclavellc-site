@@ -6,7 +6,8 @@ import { HOW_MADE_HEADING, areasAssessedPhrase, assessedAreas, evidenceLine, how
 import type { AuditResults } from './types';
 
 interface SendEmailsOptions {
-  document: Buffer;
+  // the report, a PDF (generate-pdf.ts)
+  document: Uint8Array;
   userEmail: string;
   userName?: string;
   adminEmail: string;
@@ -21,18 +22,20 @@ export interface SendEmailsResult {
   error?: string;
 }
 
+// "example.com-website-audit.pdf": the site's host name, which a URL keeps to letters, digits, dots and hyphens
+export function reportFilename(websiteUrl: string): string {
+  return `${new URL(websiteUrl).hostname}-website-audit.pdf`;
+}
+
 export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendEmailsResult> {
   const { document, userEmail, adminEmail, websiteUrl, auditResults } = options;
   const userName = options.userName?.slice(0, 100);
 
-  const documentBase64 = document.toString('base64');
-  const filename = `Website-Audit-${new URL(websiteUrl).hostname}-${new Date().toISOString().split('T')[0]}.docx`;
-
   const attachments = [
     {
-      filename,
-      content: documentBase64,
-      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      filename: reportFilename(websiteUrl),
+      content: Buffer.from(document).toString('base64'),
+      contentType: 'application/pdf'
     }
   ];
 

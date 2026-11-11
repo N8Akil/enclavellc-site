@@ -15,7 +15,7 @@ import { escapeHtml } from '@/lib/email/escape'
 import type { AuditResults } from '@/lib/audit/types'
 
 const options = () => ({
-  document: Buffer.from('docx'),
+  document: new Uint8Array(Buffer.from('%PDF-1.7 report')),
   userEmail: LEAD.email,
   userName: LEAD.name,
   adminEmail: 'n.garrett@enclavellc.net',
@@ -46,6 +46,17 @@ describe('sendAuditEmails', () => {
     send.mockResolvedValue(resendOk())
     expect(await sendAuditEmails(options())).toEqual({ success: true, userSent: true, adminSent: true })
     expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('attaches the report as a PDF named after the site, to the visitor and to the admin copy', async () => {
+    send.mockResolvedValue(resendOk())
+    await sendAuditEmails(options())
+    expect(send).toHaveBeenCalledTimes(2)
+    for (const [mail] of send.mock.calls) {
+      expect(mail.attachments).toEqual([
+        { filename: 'pii-site.example.test-website-audit.pdf', content: Buffer.from('%PDF-1.7 report').toString('base64'), contentType: 'application/pdf' },
+      ])
+    }
   })
 
   it('fails when the visitor send returns an error', async () => {
