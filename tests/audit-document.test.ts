@@ -101,6 +101,10 @@ describe('the wording helpers', () => {
     // [RULE 5] said only when it happened
     expect(text).not.toContain('build their content with scripts')
     expect(howMadeText({ ...results, scriptPages: 1 })).toContain('Some pages build their content with scripts and were not read.')
+    // the count of pages read leaves out the script-built ones the same paragraph says were not read
+    const withScripts = howMadeText({ ...results, scriptPages: 1 })
+    expect(withScripts).toContain('read the text of 2 public pages')
+    expect(howMadeText({ ...results, pagesRead: results.pagesRead.slice(0, 2), scriptPages: 1 })).toContain('read the text of 1 public page of your site')
     expect(text).toContain('Our software asked 18 links on your own site whether they answer; links to other sites were not checked.')
     expect(text).toContain('Loading speed was not measured, so Speed has no score.')
     expect(text).toContain('Findings marked as seen in the phone screenshot rest on the AI model reading the picture; our software cannot check those.')

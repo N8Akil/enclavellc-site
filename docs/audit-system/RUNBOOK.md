@@ -9,9 +9,10 @@ An accepted audit runs after the response has been sent, inside the server proce
 The admin is mailed the lead when the request is accepted, so a restart loses a report, never a lead.
 
 ## Before the preview gate is removed
-While `AUDIT_PREVIEW_EMAILS` limits reports to listed addresses, the limit above is accepted. Opening the audit to the public is blocked until this exists, with a test:
+While `AUDIT_PREVIEW_EMAILS` limits reports to listed addresses, the limit above is accepted. Opening the audit to the public is blocked until both of these exist, each with a test:
 
 - On SIGTERM, mail the admin the audits in flight (visitor address and site URL) before the process exits.
+- The automated report goes only to an address the visitor has proved they hold (a confirmation link or code sent to that address first), with a test. Until then, an audit of a hostile page could mail that page's words, from audits@, to any address typed into the form.
 
 A visitor who was told a report is coming must not be left hearing nothing.
 

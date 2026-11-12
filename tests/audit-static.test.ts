@@ -107,3 +107,22 @@ describe('nothing in the audit code reaches the network around the guard', () =>
     expect(guard).not.toMatch(BARE_FETCH)
   })
 })
+
+// The two things that must exist before the preview gate is removed are written down in the RUNBOOK and in preview.ts.
+// Deleting either sentence would let the gate be removed without them.
+describe('the preview gate keeps both of its removal conditions in writing', () => {
+  const runbook = readFileSync(join(root, 'docs/audit-system/RUNBOOK.md'), 'utf8').replace(/\s+/g, ' ')
+  const previewSource = readFileSync(join(root, 'src/lib/audit/preview.ts'), 'utf8').replace(/\/\/ ?/g, '').replace(/\s+/g, ' ')
+  const SIGTERM_BLOCKER = 'On SIGTERM, mail the admin the audits in flight (visitor address and site URL) before the process exits.'
+  const PROOF_BLOCKER =
+    "The automated report goes only to an address the visitor has proved they hold (a confirmation link or code sent to that address first), with a test. Until then, an audit of a hostile page could mail that page's words, from audits@, to any address typed into the form."
+  it('the RUNBOOK says both', () => {
+    expect(runbook).toContain(SIGTERM_BLOCKER)
+    expect(runbook).toContain(PROOF_BLOCKER)
+  })
+  it('preview.ts names both', () => {
+    expect(previewSource).toContain('On SIGTERM the admin must be mailed the audits in flight')
+    expect(previewSource).toContain('the automated report goes only to an address the visitor has proved they hold')
+    expect(previewSource).toContain("mail that page's words, from audits@, to any address typed into the form")
+  })
+})

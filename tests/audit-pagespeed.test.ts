@@ -221,6 +221,26 @@ describe('failures come back as codes, never as the body or the key', () => {
     expect(JSON.stringify(result)).not.toContain(KEY)
   })
 
+  it('a category score outside 0 to 1 gives no measure: never "150 of 100"', async () => {
+    for (const bad of [1.5, -0.2]) {
+      const body = withAudits((lr) => void ((lr.categories as Record<string, { score: number }>).performance.score = bad))
+      const result = await runPageSpeed(TARGET, { apiKey: KEY, fetch: fakeFetch(() => response(body)) })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      const { measures } = result.measurements as Extract<Measurements, { ok: true }>
+      expect(measures.performance_score).toBeUndefined()
+      expect(JSON.stringify(measures)).not.toMatch(/150|-20/)
+      // the other categories are untouched
+      expect(measures.accessibility_score).toBeDefined()
+    }
+  })
+
+  it('a response over the size cap gives its failure code and no measures, even when it is valid JSON', async () => {
+    const huge = FIXTURE_TEXT + ' '.repeat(8_000_001)
+    expect(JSON.parse(huge)).toBeTruthy()
+    expect(await runPageSpeed(TARGET, { apiKey: KEY, fetch: fakeFetch(() => response(huge)) })).toEqual({ ok: false, code: 'bad_json' })
+  })
+
   it('an abort from the caller ends the request with its own code', async () => {
     const controller = new AbortController()
     const pending = runPageSpeed(TARGET, { apiKey: KEY, fetch: hangingFetch(), signal: controller.signal })
