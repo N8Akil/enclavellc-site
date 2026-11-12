@@ -80,7 +80,8 @@ export function effortLine(fix: Fix): string {
 export const HOW_MADE_HEADING = 'How this was made and what it does not cover';
 
 export function howMadeText(results: AuditResults): string {
-  const pages = results.pagesRead.length;
+  // pages actually read: the script-built ones are said below not to have been
+  const pages = Math.max(0, results.pagesRead.length - (results.scriptPages ?? 0));
   const speed = results.areas.find((a) => a.key === 'speed');
   const hasScreen = results.phoneCallouts.length > 0 || results.areas.some((a) => a.assessed && a.findings.some((f) => f.evidence.kind === 'screen'));
   return (

@@ -5,6 +5,9 @@
 // BEFORE THIS GATE IS REMOVED (ruled 2026-11-10, see docs/audit-system/RUNBOOK.md): a stop signal ends an audit in
 // flight with no mail to anyone. On SIGTERM the admin must be mailed the audits in flight (address and URL) before
 // exit, with a test. Until that exists the gate stays.
+// ALSO BEFORE IT IS REMOVED: the automated report goes only to an address the visitor has proved they hold (a
+// confirmation link or code sent to that address first), with a test. Until then, an audit of a hostile page could
+// mail that page's words, from audits@, to any address typed into the form.
 import { escapeHtml } from '@/lib/email/escape';
 import type { Niche } from './config';
 import { auditSetting } from './env';

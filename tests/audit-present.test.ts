@@ -95,6 +95,11 @@ describe('the wording helpers', () => {
     expect(plain).not.toContain('seen in the phone screenshot')
     expect(plain).not.toContain('PageSpeed')
 
+    // the count of pages read leaves out the script-built ones the same paragraph says were not read
+    const withScripts = howMadeText({ ...results, scriptPages: 1 })
+    expect(withScripts).toContain('read the text of 2 public pages')
+    expect(howMadeText({ ...results, pagesRead: results.pagesRead.slice(0, 2), scriptPages: 1 })).toContain('read the text of 1 public page of your site')
+
     // measured by Google's test: said, with what it is not (real visitors)
     const measured = howMadeText({ ...results, measured: true })
     expect(measured).toContain("Findings marked as measured come from one run of Google's PageSpeed Insights test on a simulated phone, not from your visitors; a real visit can be faster or slower.")

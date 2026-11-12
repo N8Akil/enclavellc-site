@@ -8,7 +8,7 @@ import { UnsafeUrlError, type ResolvedAddress, type Transport, type TransportReq
 const PUBLIC = '93.184.216.34'
 const HTML = { 'content-type': 'text/html' }
 
-type Served = string | { status?: number; headers?: Record<string, string>; hang?: boolean; body?: string; head?: number; throws?: boolean }
+type Served = string | { status?: number; headers?: Record<string, string>; hang?: boolean; body?: string; head?: number; throws?: boolean; throwsFirst?: number }
 function site(pages: Record<string, Served>, dns: Record<string, string[]> = {}) {
   const calls: TransportRequest[] = []
   let inFlight = 0
@@ -25,6 +25,7 @@ function site(pages: Record<string, Served>, dns: Record<string, string[]> = {})
       const read = (text: string) => (async function* () { bodiesRead++; yield new TextEncoder().encode(text) })()
       if (page === undefined) return { status: 404, headers: HTML, body: read('not found') }
       if (typeof page !== 'string' && page.hang) return await new Promise<never>(() => {})
+      if (typeof page !== 'string' && page.throwsFirst !== undefined && calls.filter((c) => c.url.href === request.url.href).length <= page.throwsFirst) throw new Error(`connect ECONNRESET ${request.address}`)
       if (typeof page !== 'string' && page.throws) throw new Error(`connect ECONNREFUSED ${request.address}`)
       const body = typeof page === 'string' ? page : page.body ?? ''
       const status = typeof page === 'string' ? 200 : request.method === 'HEAD' && page.head !== undefined ? page.head : page.status ?? 200
@@ -777,6 +778,30 @@ describe('the site besides its pages: robots.txt, the sitemap, the http:// addre
       expect(content.probes!.https).toBe('no_answer')
       expect(content.probes!.httpsRedirect).toBe('unknown')
       expect(computeFacts(content, 'general').map((f) => f.id)).toContain('no_https_answer')
+    })
+
+    it('one dropped connection on https:// is asked again once: no false "no answer" finding', async () => {
+      const s = site({ 'http://x.example.test/': home(), 'https://x.example.test/': { body: home(), throwsFirst: 1 } })
+      const content = await fetchWebsiteContent('http://x.example.test', s.options)
+      expect(content.probes!.https).toBe('yes')
+      expect(computeFacts(content, 'general').map((f) => f.id)).not.toContain('no_https_answer')
+      expect(s.calls.filter((c) => c.url.href === 'https://x.example.test/' && c.method !== 'HEAD' && !/robots|sitemap/.test(c.url.pathname)).length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('two failures in a row are "no_answer"; the retry is a request of the audit\'s budget', async () => {
+      const s = site({ 'http://x.example.test/': home(), 'https://x.example.test/': { throws: true } })
+      const content = await fetchWebsiteContent('http://x.example.test', s.options)
+      expect(content.probes!.https).toBe('no_answer')
+      expect(s.calls.filter((c) => c.url.href === 'https://x.example.test/')).toHaveLength(2)
+      // one home read, robots.txt, sitemap.xml and the two https attempts: with a budget of exactly that, all five go out...
+      const exact = site({ 'http://x.example.test/': home(), 'https://x.example.test/': { throws: true } })
+      await fetchWebsiteContent('http://x.example.test', { ...exact.options, maxRequests: 5 })
+      expect(exact.calls.filter((c) => c.url.href === 'https://x.example.test/')).toHaveLength(2)
+      // ...and with one less, the budget stops the second attempt (it is charged like any other request)
+      const short = site({ 'http://x.example.test/': home(), 'https://x.example.test/': { throws: true } })
+      const result = await fetchWebsiteContent('http://x.example.test', { ...short.options, maxRequests: 4 })
+      expect(short.calls).toHaveLength(4)
+      expect(result.probes!.https).toBe('unknown')
     })
 
     it.each([

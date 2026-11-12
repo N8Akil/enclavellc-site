@@ -200,15 +200,21 @@ async function probeSite(
   // 'no_answer' only when the request failed with a connection or TLS error (NETWORK); anything else is unknown.
   const https = (async (): Promise<NonNullable<SiteProbes['https']>> => {
     if (home.protocol === 'https:') return 'yes';
-    try {
-      const secure = await safeFetchPage(`https://${home.host}/`, siteRead);
-      return secure.finalUrl.startsWith('https://') ? 'yes' : 'unknown';
-    } catch (error) {
-      if (!(error instanceof UnsafeUrlError)) return 'unknown';
-      // it answered over https with a page of another type: it has https
-      if (error.code === 'BAD_CONTENT_TYPE') return 'yes';
-      return error.code === 'NETWORK' ? 'no_answer' : 'unknown';
+    // one dropped socket must not print "no answer on https": a connection or TLS error is asked again ONCE, through
+    // the same guard, so the retry is a request of the audit's budget like any other. Two in a row are the answer.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const secure = await safeFetchPage(`https://${home.host}/`, siteRead);
+        return secure.finalUrl.startsWith('https://') ? 'yes' : 'unknown';
+      } catch (error) {
+        if (!(error instanceof UnsafeUrlError)) return 'unknown';
+        // it answered over https with a page of another type: it has https
+        if (error.code === 'BAD_CONTENT_TYPE') return 'yes';
+        if (error.code !== 'NETWORK') return 'unknown';
+        if (attempt === 1) return 'no_answer';
+      }
     }
+    return 'unknown';
   })();
 
   // one extra request: the same host over http://. Where it ends up is the answer. Its redirect to https:// (on the

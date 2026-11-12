@@ -22,6 +22,7 @@ import {
   createAuditClient,
   newNonce,
   renderSystemPrompt,
+  MAX_QUOTE_LENGTH,
   MAX_STRIP_INPUT,
   MAX_STRIP_PASSES,
   proseNumbersOk,
@@ -1477,6 +1478,31 @@ describe('[P3-3, P3-4, P3-5] quotes: one block, the page\'s literal words, and F
     expect(sent.own.some((w) => w.includes(joined))).toBe(true)
     expect(sent.literal.some((w) => w.includes(joined))).toBe(false)
     await refused(inputQuoting(HOME, joined), site)
+  })
+
+  it('a quote that is in the page\'s literal text but not in the words we sent is refused (both must hold)', () => {
+    const site = onePage('<p>We repair old roofs UNTRUSTED_PAGE_CONTENT across the whole county every week.</p>')
+    const { pages, facts } = buildUserMessage(site, SITE, {}, NONCE)
+    const sent = pages.get(HOME)!
+    const quote = 'roofs UNTRUSTED_PAGE_CONTENT across the whole county'
+    expect(sent.literal.some((w) => w.includes(quote))).toBe(true)
+    expect(sent.own.some((w) => w.includes(quote))).toBe(false)
+    const context = { pages, facts, measures: new Map<string, string>(), screen: false }
+    expect(verifyEvidence({ kind: 'quote', pageUrl: HOME, text: quote }, context)).toBeNull()
+  })
+
+  it('a quote longer than MAX_QUOTE_LENGTH is refused even when the page holds every word of it; one at the limit is kept', () => {
+    const long = Array.from({ length: 60 }, (_, i) => `word${i}`).join(' ')
+    const site = onePage(`<p>${long}</p>`)
+    const { pages, facts } = buildUserMessage(site, SITE, {}, NONCE)
+    const context = { pages, facts, measures: new Map<string, string>(), screen: false }
+    const over = long.slice(0, MAX_QUOTE_LENGTH + 5).trimEnd()
+    expect(over.length).toBeGreaterThan(MAX_QUOTE_LENGTH)
+    expect(long.includes(over)).toBe(true)
+    expect(verifyEvidence({ kind: 'quote', pageUrl: HOME, text: over }, context)).toBeNull()
+    const atLimit = long.slice(0, MAX_QUOTE_LENGTH).trimEnd()
+    expect(atLimit.length).toBeLessThanOrEqual(MAX_QUOTE_LENGTH)
+    expect(verifyEvidence({ kind: 'quote', pageUrl: HOME, text: atLimit }, context)).toMatchObject({ kind: 'quote' })
   })
 
   it('[P3-5] First impression rests on the home page: a quote from another page, or a site-wide fact, is dropped there', () => {
