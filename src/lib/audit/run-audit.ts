@@ -541,15 +541,16 @@ const evidenceText = (evidence: Evidence): string =>
 // THE MODEL WRITES NO NUMBER OF ITS OWN. Every digit in a printed piece of the model's prose must be a number that
 // is in the evidence printed beside that piece (a quote's words, a fact's or a measure's words, all written by the
 // page or by our code; heading names like "H1" are not numbers). where-you-stand cites nothing, so it may hold no digit at all; an area's line may use the
-// numbers of that area's printed findings. Returns false at the first number that has no such source: the reply is
-// then refused like a schema miss. NOT covered: numbers written as words ("ten"), and the phone call-outs, which
-// exist only with a screenshot (nothing supplies one yet).
+// numbers of that area's printed findings. The phone call-outs (only with a screenshot, which Google's PageSpeed
+// test now supplies) cite nothing either, so they may hold no digit. Returns false at the first number that has no
+// such source: the reply is then refused like a schema miss. NOT covered: numbers written as words ("ten").
 export function proseNumbersOk(result: AuditResults): boolean {
   const fits = (prose: string[], evidence: Evidence[]) => {
     const allowed = new Set(evidence.flatMap((e) => numbersIn(evidenceText(e))));
     return prose.every((text) => numbersIn(text).every((n) => allowed.has(n)));
   };
   if (!fits([result.whereYouStand], [])) return false;
+  for (const callout of result.phoneCallouts ?? []) if (!fits([callout.title, callout.line], [])) return false;
   for (const item of result.working) if (!fits([item.title, item.line], [item.evidence])) return false;
   for (const fix of result.fixes) if (!fits([fix.headline, fix.whatWeSaw, fix.whyItMatters, fix.theFix], [fix.evidence])) return false;
   for (const area of result.areas) {
@@ -691,6 +692,8 @@ function assemble(input: ToolInput, message: PreparedMessage, websiteUrl: string
     droppedFindings: dropped,
     // said in "how this was made" only when it happened
     ...(scriptPages > 0 ? { scriptPages } : {}),
+    ...(offer.measure ? { measured: true as const } : {}),
+    ...(offer.screen ? { screenshotTaken: true as const } : {}),
   };
 }
 

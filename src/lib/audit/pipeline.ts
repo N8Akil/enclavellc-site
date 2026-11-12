@@ -6,6 +6,7 @@ import type { Niche } from './config';
 import { fetchWebsiteContent } from './fetch-website';
 import { generateAuditDocument } from './generate-document';
 import { sendFailureMails, type Lead } from './notify';
+import { PAGESPEED_TIMEOUT_MS, pageSpeedMeasurements } from './pagespeed';
 import { runAudit } from './run-audit';
 import { sendAuditEmails } from './send-emails';
 import type { AuditResults, Measurements } from './types';
@@ -16,13 +17,16 @@ export interface AuditJob extends Lead {
   niche: Niche;
 }
 
-// Nothing in this repository measures a site yet. Until something is passed in, Speed is "not measured", there is
-// no screenshot, and the model is offered neither the "measure" nor the "screen" kind of evidence.
+// A stand-in that measures nothing: Speed is "not measured", there is no screenshot, and the model is offered neither
+// the "measure" nor the "screen" kind of evidence. The default is Google's PageSpeed test (pagespeed.ts), which gives
+// the same "not measured" whenever it has no key or fails.
 export const notMeasured = async (): Promise<Measurements> => ({ ok: false, reason: 'not_configured' });
+
+export type Measure = (siteUrl: string, options?: { signal?: AbortSignal }) => Promise<Measurements>;
 
 export interface PipelineDeps {
   fetchSite?: typeof fetchWebsiteContent;
-  measure?: (siteUrl: string) => Promise<Measurements>;
+  measure?: Measure;
   audit?: typeof runAudit;
   makeDocument?: typeof generateAuditDocument;
   sendReport?: typeof sendAuditEmails;
@@ -50,17 +54,41 @@ class StageFailure extends Error {
 export async function runAuditJob(job: AuditJob, deps: PipelineDeps = {}): Promise<'sent' | 'failed'> {
   const tag = `[Audit] ${job.requestId}`;
   let stage: Stage = 'fetch';
+  // The speed test runs while the site is read. A measurement that fails, throws or times out is not a failed
+  // audit: it becomes "not measured", and the report says so. If the site cannot be read, the test is aborted.
+  const measuring = new AbortController();
+  const notMeasuredAfterFailure = (): Measurements => ({ ok: false, reason: 'failed' });
+  let measured: Promise<Measurements>;
+  try {
+    // started before the site is read, so the two run side by side
+    measured = Promise.resolve((deps.measure ?? pageSpeedMeasurements)(job.websiteUrl, { signal: measuring.signal })).catch(notMeasuredAfterFailure);
+  } catch {
+    measured = Promise.resolve(notMeasuredAfterFailure());
+  }
   try {
     console.log(`${tag} fetching site`);
-    const content = await (deps.fetchSite ?? fetchWebsiteContent)(job.websiteUrl);
-
-    // a measurement that fails is not a failed audit: the report says what was not measured
-    let measurements: Measurements;
+    let content: Awaited<ReturnType<typeof fetchWebsiteContent>>;
     try {
-      measurements = await (deps.measure ?? notMeasured)(job.websiteUrl);
-    } catch {
-      measurements = { ok: false, reason: 'failed' };
+      content = await (deps.fetchSite ?? fetchWebsiteContent)(job.websiteUrl);
+    } catch (error) {
+      measuring.abort();
+      throw error;
     }
+
+    // a measure step that never settles is cut off a little after the test's own time limit
+    let cutOff: ReturnType<typeof setTimeout> | undefined;
+    const measurements = await Promise.race([
+      measured,
+      new Promise<Measurements>((resolve) => {
+        cutOff = setTimeout(() => resolve({ ok: false, reason: 'timeout' }), PAGESPEED_TIMEOUT_MS + 5_000);
+      }),
+    ]).finally(() => {
+      clearTimeout(cutOff);
+      measuring.abort();
+    });
+    // a code only (pagespeed.ts gives codes; anything else is reported as "failed")
+    const code = measurements.ok === true ? 'ok' : /^[a-z0-9_]{1,40}$/.test(String(measurements.reason)) ? measurements.reason : 'failed';
+    (code === 'ok' ? console.log : console.warn)(`${tag} pagespeed: ${code}`);
 
     stage = 'model';
     console.log(`${tag} running analysis`);

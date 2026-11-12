@@ -37,6 +37,8 @@ let logs: ReturnType<typeof spyLogs>
 beforeEach(() => {
   send.mockReset()
   vi.stubEnv('RESEND_API_KEY', 're_test_placeholder_not_a_key')
+  // the default measure step is Google's test: with no key setting it never makes a request
+  vi.stubEnv('GOOGLE_PAGESPEED_API_KEY', undefined)
   logs = spyLogs()
 })
 afterEach(() => {
@@ -65,12 +67,12 @@ describe('runAuditJob', () => {
     expectNoPii(logs, { includeLog: true })
   })
 
-  describe('measurements: nothing measures a site yet, and the default says so', () => {
-    it('the default returns "not configured", and that is what the model step is given', async () => {
+  describe('measurements: the default is Google\'s PageSpeed test, and without its key it measures nothing', () => {
+    it('the stand-in returns "not configured"; the default with no key setting gives "no_key", and that is what the model step is given', async () => {
       await expect(notMeasured()).resolves.toEqual({ ok: false, reason: 'not_configured' })
       const { mocks, deps } = stages()
       await runAuditJob(job, deps)
-      expect(mocks.audit.mock.calls[0][3]).toEqual({ requestId: 'abcd1234', measurements: { ok: false, reason: 'not_configured' } })
+      expect(mocks.audit.mock.calls[0][3]).toEqual({ requestId: 'abcd1234', measurements: { ok: false, reason: 'no_key' } })
     })
 
     it('an injected measurement is passed through to the model step untouched', async () => {
@@ -78,7 +80,7 @@ describe('runAuditJob', () => {
       const measure = vi.fn(async () => measured)
       const { mocks, deps } = stages({ measure })
       await runAuditJob(job, deps)
-      expect(measure).toHaveBeenCalledWith(SITE)
+      expect(measure).toHaveBeenCalledWith(SITE, { signal: expect.any(AbortSignal) })
       expect(mocks.audit.mock.calls[0][3]).toEqual({ requestId: 'abcd1234', measurements: measured })
     })
 

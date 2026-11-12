@@ -113,6 +113,15 @@ describe('the wording helpers', () => {
     expect(plain).toContain('No picture of your site was taken: First impression is judged from the opening text of your home page only.')
     expect(plain).toContain('Links were not checked.')
     expect(plain).not.toContain('seen in the phone screenshot')
+    expect(plain).not.toContain('PageSpeed')
+
+    // measured by Google's test: said, with what it is not (real visitors)
+    const measured = howMadeText({ ...results, measured: true })
+    expect(measured).toContain("Findings marked as measured come from one run of Google's PageSpeed Insights test on a simulated phone, not from your visitors; a real visit can be faster or slower.")
+    // a screenshot was given but nothing printed rests on it: never "No picture of your site was taken"
+    const shotUnused = howMadeText({ ...results, phoneCallouts: [], screenshotTaken: true, areas: results.areas.filter((a) => a.key !== 'first_impression') })
+    expect(shotUnused).toContain("A phone screenshot of your home page, taken by Google's test, was given to the AI model with the text.")
+    expect(shotUnused).not.toContain('No picture of your site was taken')
   })
 })
 

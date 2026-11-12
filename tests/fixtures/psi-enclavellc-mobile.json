@@ -1,0 +1,74 @@
+{
+  "id": "https://enclavellc.net/",
+  "analysisUTCTimestamp": "2026-11-12T20:07:42.235Z",
+  "loadingExperience": {
+    "initial_url": "https://enclavellc.net/"
+  },
+  "lighthouseResult": {
+    "requestedUrl": "https://enclavellc.net/",
+    "finalUrl": "https://enclavellc.net/",
+    "finalDisplayedUrl": "https://enclavellc.net/",
+    "lighthouseVersion": "13.6.0",
+    "fetchTime": "2026-11-12T20:07:42.235Z",
+    "configSettings": {
+      "formFactor": "mobile"
+    },
+    "categories": {
+      "performance": {
+        "id": "performance",
+        "score": 0.95
+      },
+      "accessibility": {
+        "id": "accessibility",
+        "score": 1
+      },
+      "best-practices": {
+        "id": "best-practices",
+        "score": 1
+      },
+      "seo": {
+        "id": "seo",
+        "score": 1
+      }
+    },
+    "audits": {
+      "largest-contentful-paint": {
+        "id": "largest-contentful-paint",
+        "numericValue": 1240,
+        "numericUnit": "millisecond"
+      },
+      "first-contentful-paint": {
+        "id": "first-contentful-paint",
+        "numericValue": 1240,
+        "numericUnit": "millisecond"
+      },
+      "cumulative-layout-shift": {
+        "id": "cumulative-layout-shift",
+        "numericValue": 0,
+        "numericUnit": "unitless"
+      },
+      "total-blocking-time": {
+        "id": "total-blocking-time",
+        "numericValue": 35.5,
+        "numericUnit": "millisecond"
+      },
+      "speed-index": {
+        "id": "speed-index",
+        "numericValue": 5529.675225227076,
+        "numericUnit": "millisecond"
+      },
+      "total-byte-weight": {
+        "id": "total-byte-weight",
+        "numericValue": 1005252,
+        "numericUnit": "byte"
+      },
+      "final-screenshot": {
+        "id": "final-screenshot",
+        "details": {
+          "type": "screenshot",
+          "data": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAASABIAAD/wAALCAAIAAgBAREA/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9sAQwATExMTExMgExMgLSAgIC09LS0tLT1NPT09PT1NXU1NTU1NTV1dXV1dXV1dcHBwcHBwg4ODg4OTk5OTk5OTk5OT/90ABAAB/9oACAEBAAA/AO1r/9k="
+        }
+      }
+    }
+  }
+}
