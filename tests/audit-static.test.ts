@@ -8,6 +8,10 @@ import { describe, expect, it } from 'vitest'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const GUARDED_DIRS = ['src/lib/audit', 'src/app/api/audit']
 const THE_GUARD = 'src/lib/audit/safe-fetch.ts'
+// The ONE exception: Google's PageSpeed test is a fixed, trusted host, not the audited site, so it does not go
+// through the guard. It is allowed in this file only, through one reference to the platform's fetch, to one
+// fixed endpoint (checked below).
+const PAGESPEED = 'src/lib/audit/pagespeed.ts'
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -43,10 +47,20 @@ describe('nothing in the audit code reaches the network around the guard', () =>
     expect(files.map((f) => f.name)).toContain('src/app/api/audit/generate/route.ts')
   })
 
-  it.each(files.map((f) => [f.name, f.text]))('%s has no bare fetch( call', (_, text) => {
+  it.each(files.map((f) => [f.name, f.text]))('%s has no bare fetch( call', (name, text) => {
     expect(text).not.toMatch(BARE_FETCH)
-    expect(text).not.toMatch(GLOBAL_FETCH)
+    if (name !== PAGESPEED) expect(text).not.toMatch(GLOBAL_FETCH)
     expect(text).not.toMatch(XHR)
+  })
+
+  it('the PageSpeed exception is exactly one request, to Google\'s fixed endpoint, with redirects refused', () => {
+    const text = files.find((f) => f.name === PAGESPEED)!.text
+    const globals = text.match(new RegExp(GLOBAL_FETCH.source, 'g')) ?? []
+    expect(globals).toEqual(['globalThis.fetch'])
+    expect(text).toContain('(options.fetch ?? globalThis.fetch)(pageSpeedRequestUrl(address), {')
+    expect(text).toContain("export const PAGESPEED_ENDPOINT = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';")
+    expect(text).toContain('return `${PAGESPEED_ENDPOINT}?${params.toString()}`;')
+    expect(text).toContain("redirect: 'error'")
   })
 
   it.each(files.filter((f) => f.name !== THE_GUARD).map((f) => [f.name, f.text]))('%s imports no HTTP or socket client of its own', (_, text) => {

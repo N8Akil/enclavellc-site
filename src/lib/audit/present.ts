@@ -94,9 +94,14 @@ export function howMadeText(results: AuditResults): string {
       ? `Our software asked ${results.linksChecked} ${results.linksChecked === 1 ? 'link' : 'links'} on your own site whether ${results.linksChecked === 1 ? 'it answers' : 'they answer'}; links to other sites were not checked. `
       : 'Links were not checked. ') +
     (speed && !speed.assessed && speed.reason === NOT_MEASURED_SENTENCE ? 'Loading speed was not measured, so Speed has no score. ' : '') +
+    (results.measured
+      ? "Findings marked as measured come from one run of Google's PageSpeed Insights test on a simulated phone, not from your visitors; a real visit can be faster or slower. "
+      : '') +
     (hasScreen
       ? 'Findings marked as seen in the phone screenshot rest on the AI model reading the picture; our software cannot check those. '
-      : 'No picture of your site was taken: First impression is judged from the opening text of your home page only. ') +
+      : results.screenshotTaken
+        ? "A phone screenshot of your home page, taken by Google's test, was given to the AI model with the text. "
+        : 'No picture of your site was taken: First impression is judged from the opening text of your home page only. ') +
     `The score covers ${areasAssessedPhrase(results)} only. ` +
     'It does not cover your visitor numbers, where you rank in search, your competitors, or anything behind a login. No person has reviewed it.'
   );

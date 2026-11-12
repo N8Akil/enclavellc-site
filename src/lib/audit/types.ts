@@ -106,8 +106,9 @@ export interface WebsiteContent {
   offSitePages?: string[];
 }
 
-// A measurement from outside this code (a page-speed test, a phone screenshot). Nothing in this repository makes
-// one yet: the pipeline's default returns { ok: false }, and then Speed is not assessed and no screenshot exists.
+// A measurement from outside this code (a page-speed test, a phone screenshot). pagespeed.ts makes one from Google's
+// PageSpeed test; without its key, or when it fails, it is { ok: false }, and then Speed is not assessed and no
+// screenshot exists.
 export type Measurements =
   | { ok: false; reason: string }
   | {
@@ -202,6 +203,10 @@ export interface AuditResults {
   droppedFindings: number;
   // pages read that build their content with scripts, whose text was therefore not read (left out: none)
   scriptPages?: number;
+  // a measurement (Google's PageSpeed test) was given to the model (left out: none was)
+  measured?: true;
+  // a phone screenshot of the home page was given to the model (left out: none was)
+  screenshotTaken?: true;
 }
 
 export interface AuditError {

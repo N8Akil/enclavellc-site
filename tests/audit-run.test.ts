@@ -605,6 +605,22 @@ describe('runAudit', () => {
       await refused({ ...toolInput({ ...SCORES, speed: 6 }), phoneCallouts: [{ title: 'ok', line: 'l'.repeat(LIMITS.calloutLine + 1) }] }, content(), WITH_SHOT)
     })
 
+    it('a call-out cites nothing, so a digit in it is a number of the model\'s own: refused', async () => {
+      await refused({ ...toolInput({ ...SCORES, speed: 6 }), phoneCallouts: [{ title: 'The button is small', line: 'It is about 20 pixels tall.' }] }, content(), WITH_SHOT)
+      await refused({ ...toolInput({ ...SCORES, speed: 6 }), phoneCallouts: [{ title: 'Loads in 4.2 seconds', line: 'The page is slow.' }] }, content(), WITH_SHOT)
+    })
+
+    it('the result says a measurement and a screenshot were given, so the report can say so (and says nothing when they were not)', async () => {
+      const shot = ok(await run(client(toolReply({ ...toolInput({ ...SCORES, speed: 6 }), phoneCallouts: [] })), content(), WITH_SHOT))
+      expect(shot).toMatchObject({ measured: true, screenshotTaken: true })
+      const measuresOnly = ok(await run(client(toolReply(toolInput({ ...SCORES, speed: 6 }))), content(), MEASURES))
+      expect(measuresOnly.measured).toBe(true)
+      expect(measuresOnly).not.toHaveProperty('screenshotTaken')
+      const none = ok(await run(client(toolReply(toolInput()))))
+      expect(none).not.toHaveProperty('measured')
+      expect(none).not.toHaveProperty('screenshotTaken')
+    })
+
     it.each([
       ['an SVG', { mediaType: 'image/svg+xml', dataBase64: PNG }],
       ['HTML', { mediaType: 'text/html', dataBase64: PNG }],
