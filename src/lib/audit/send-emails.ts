@@ -1,7 +1,8 @@
 // src/lib/audit/send-emails.ts
 import { escapeHtml } from '@/lib/email/escape';
-import { getResendClient } from '@/lib/email/resend-client';
-import { HOW_MADE_HEADING, areasReadPhrase, assessedCategories, evidenceLine, howMadeText, scoreLine } from './present';
+import { statusFor } from './config';
+import { sendMail, type Mail } from './mail';
+import { HOW_MADE_HEADING, areasAssessedPhrase, assessedAreas, evidenceLine, howMadeText, scoreLine } from './present';
 import type { AuditResults } from './types';
 
 interface SendEmailsOptions {
@@ -27,7 +28,6 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendE
   const documentBase64 = document.toString('base64');
   const filename = `Website-Audit-${new URL(websiteUrl).hostname}-${new Date().toISOString().split('T')[0]}.docx`;
 
-  const client = getResendClient();
   const attachments = [
     {
       filename,
@@ -36,39 +36,33 @@ export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendE
     }
   ];
 
-  // Resend returns { data, error } instead of throwing on API errors, so both results are checked.
-  // The admin send is attempted even if the visitor's failed, so the lead still reaches the inbox.
-  // Failures are reported as codes only: Resend's messages can echo the addresses.
+  // Each send has a time limit (mail.ts). Failures are reported as codes only: Resend's messages can echo the addresses.
+  // The admin's copy, a lead that says the report went out, is sent ONLY once the visitor's report is confirmed
+  // sent. Otherwise the caller writes to the admin once, saying the report was not confirmed (pipeline.ts).
   const failures: string[] = [];
-  const attempt = async (who: 'user' | 'admin', send: () => ReturnType<typeof client.emails.send>): Promise<boolean> => {
-    try {
-      const { data, error } = await send();
-      if (error) failures.push(`${who}: ${error.statusCode ?? '-'} ${error.name}`);
-      else if (!data?.id) failures.push(`${who}: no id`);
-      else return true;
-    } catch (error) {
-      failures.push(`${who}: threw ${error instanceof Error ? error.name : typeof error}`);
-    }
-    return false;
+  const attempt = async (who: 'user' | 'admin', mail: Mail): Promise<boolean> => {
+    const outcome = await sendMail(who, mail);
+    if (!outcome.sent) failures.push(outcome.error);
+    return outcome.sent;
   };
 
   // Send to user
-  const userSent = await attempt('user', () => client.emails.send({
+  const userSent = await attempt('user', {
     from: 'Enclave LLC <audits@enclavellc.net>',
     to: userEmail,
     subject: `Your Website Audit Report for ${websiteUrl} is Ready!`,
     html: generateUserEmailHtml(userName, websiteUrl, auditResults),
     attachments
-  }));
+  });
 
   // Send admin notification
-  const adminSent = await attempt('admin', () => client.emails.send({
+  const adminSent = userSent && await attempt('admin', {
     from: 'Enclave Audit System <audits@enclavellc.net>',
     to: adminEmail,
     subject: `New Audit Lead: ${websiteUrl}`,
     html: generateAdminEmailHtml(userEmail, userName, websiteUrl, auditResults),
     attachments
-  }));
+  });
 
   return failures.length
     ? { success: false, userSent, adminSent, error: failures.join('; ') }
@@ -82,17 +76,19 @@ function generateUserEmailHtml(
 ): string {
   // everything below comes from the visitor or from their site: escape it
   // (model text and quotes from the site are untrusted: nothing reaches the HTML unescaped)
-  const topFindings = auditResults.criticalIssues.slice(0, 3).map(i =>
-    `${escapeHtml(i.title)}<br><span style="color: #666666; font-size: 13px;">${escapeHtml(evidenceLine(i.evidence))}</span>`
+  const evidence = (line: string) => `<br><span style="color: #666666; font-size: 13px;">${escapeHtml(line)}</span>`;
+  // the fixes, each with what was seen and what that rests on
+  const topFindings = auditResults.fixes.map(f =>
+    `<strong>${escapeHtml(f.headline)}</strong><br>${escapeHtml(f.whatWeSaw)}${evidence(evidenceLine(f.evidence))}`
   );
   // every area, with a score only where one was assessed
-  const areaRows = auditResults.categories.map(c =>
-    c.assessed
-      ? `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.score)} of 10</li>`
-      : `<li><strong>${escapeHtml(c.name)}:</strong> ${escapeHtml(c.reason)}</li>`
+  const areaRows = auditResults.areas.map(a =>
+    a.assessed
+      ? `<li><strong>${escapeHtml(a.name)}:</strong> ${escapeHtml(a.score)} of 10. ${escapeHtml(a.line)}</li>`
+      : `<li><strong>${escapeHtml(a.name)}:</strong> ${escapeHtml(a.reason)}</li>`
   );
-  const topStrengths = auditResults.topStrengths.slice(0, 2).map(s =>
-    `${escapeHtml(s.title)}<br><span style="color: #666666; font-size: 13px;">${escapeHtml(evidenceLine(s.evidence))}</span>`
+  const topStrengths = auditResults.working.map(w =>
+    `<strong>${escapeHtml(w.title)}:</strong> ${escapeHtml(w.line)}${evidence(evidenceLine(w.evidence))}`
   );
   const name = escapeHtml(userName || 'there');
   const site = escapeHtml(websiteUrl);
@@ -137,16 +133,19 @@ function generateUserEmailHtml(
               <p style="color: #333333; font-size: 16px; line-height: 1.6;">
                 Great news! Your free website audit for <strong>${site}</strong> is complete.
               </p>
+              <p style="color: #333333; font-size: 16px; line-height: 1.6;">
+                ${escapeHtml(auditResults.whereYouStand)}
+              </p>
 
               ${topStrengths.length > 0 ? `
-              <h3 style="color: #27AE60; margin-top: 25px;">✓ Top Strengths</h3>
+              <h3 style="color: #27AE60; margin-top: 25px;">✓ What Is Working</h3>
               <ul style="color: #333333; font-size: 14px; line-height: 1.8;">
                 ${topStrengths.map(s => `<li>${s}</li>`).join('')}
               </ul>
               ` : ''}
 
               ${topFindings.length > 0 ? `
-              <h3 style="color: #C0392B; margin-top: 25px;">⚠ Priority Issues</h3>
+              <h3 style="color: #C0392B; margin-top: 25px;">⚠ The Fixes That Matter Most</h3>
               <ul style="color: #333333; font-size: 14px; line-height: 1.8;">
                 ${topFindings.map(f => `<li>${f}</li>`).join('')}
               </ul>
@@ -158,7 +157,7 @@ function generateUserEmailHtml(
               </ul>
 
               <p style="color: #333333; font-size: 16px; line-height: 1.6; margin-top: 25px;">
-                Your full audit report is attached to this email. It covers ${escapeHtml(areasReadPhrase(auditResults))}, with the evidence behind each finding, specific recommendations, and a prioritized action plan.
+                Your full audit report is attached to this email. It covers ${escapeHtml(areasAssessedPhrase(auditResults))}, and says what each finding rests on.
               </p>
 
               <p style="color: #666666; font-size: 13px; line-height: 1.6; margin-top: 25px;">
@@ -204,11 +203,11 @@ function generateAdminEmailHtml(
   websiteUrl: string,
   auditResults: AuditResults
 ): string {
-  const { categories, overallScore, criticalIssues } = auditResults;
+  const { areas, overallScore, fixes } = auditResults;
 
-  // Find highest and lowest scoring categories, among the areas that were assessed
-  const sortedCategories = assessedCategories(auditResults).sort((a, b) => b.score - a.score);
-  const notAssessed = categories.filter(c => !c.assessed).map(c => c.name);
+  // Find highest and lowest scoring areas, among those that were assessed
+  const sortedCategories = assessedAreas(auditResults).sort((a, b) => b.score - a.score);
+  const notAssessed = areas.filter(a => !a.assessed).map(a => a.name);
   const highest = sortedCategories[0];
   const lowest = sortedCategories[sortedCategories.length - 1];
 
@@ -272,8 +271,9 @@ function generateAdminEmailHtml(
         <ul style="color: #333333; font-size: 14px; line-height: 1.8; padding-left: 20px;">
           <li><strong>Highest Score:</strong> ${escapeHtml(highest?.name || 'N/A')} (${escapeHtml(highest?.score || 'N/A')})</li>
           <li><strong>Lowest Score:</strong> ${escapeHtml(lowest?.name || 'N/A')} (${escapeHtml(lowest?.score || 'N/A')})</li>
-          <li><strong>Critical Issues:</strong> ${criticalIssues.length}</li>
-          <li><strong>Score covers:</strong> ${escapeHtml(areasReadPhrase(auditResults))}</li>
+          <li><strong>Audit written for:</strong> ${escapeHtml(auditResults.niche === 'home_care' ? 'a home care agency' : 'a general small business')}</li>
+          <li><strong>Fixes listed:</strong> ${fixes.length}</li>
+          <li><strong>Score covers:</strong> ${escapeHtml(areasAssessedPhrase(auditResults))}</li>
           <li><strong>Not assessed:</strong> ${escapeHtml(notAssessed.join(', ') || 'none')}</li>
           <li><strong>Pages read:</strong> ${auditResults.pagesRead.length}</li>
           <li><strong>Findings removed (evidence did not check out):</strong> ${escapeHtml(auditResults.droppedFindings)}</li>
@@ -291,8 +291,10 @@ function generateAdminEmailHtml(
   `.trim();
 }
 
+// the colour follows the status label printed beside the score (config.ts statusFor), so the two never disagree
 function getScoreColor(score: number): string {
-  if (score >= 8) return '#27AE60';
-  if (score >= 6) return '#F39C12';
+  const status = statusFor(score);
+  if (status === 'Excellent' || status === 'Good') return '#27AE60';
+  if (status === 'Needs Improvement') return '#F39C12';
   return '#C0392B';
 }

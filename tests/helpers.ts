@@ -2,7 +2,7 @@ import { inspect } from 'node:util'
 import { inflateRawSync } from 'node:zlib'
 import { expect, vi, type MockInstance } from 'vitest'
 import { NextRequest } from 'next/server'
-import { NOT_ASSESSED_SENTENCE } from '@/lib/audit/config'
+import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
 import type { AuditResults } from '@/lib/audit/types'
 
 // A visitor whose every field is easy to spot in a log line.
@@ -47,30 +47,130 @@ export const auditFixture = {
   success: true,
   websiteUrl: SITE,
   auditDate: '2026-11-09T00:00:00.000Z',
+  niche: 'general',
   overallScore: 6.4,
   overallStatus: 'Needs Improvement',
-  summary: 'Fixture.',
-  categories: [
+  whereYouStand: 'A clear offer that is hard to act on from a phone.',
+  working: [
+    { title: 'Clear offer', line: 'The first line says what you do and where.', evidence: { kind: 'quote', pageUrl: `${SITE}/`, quote: 'We fix leaks and drains across the county' } },
+  ],
+  fixes: [
     {
-      key: 'content_quality',
-      name: 'Content Quality',
+      headline: 'Give search results a description',
+      whatWeSaw: 'The home page has no description for search results.',
+      evidence: { kind: 'absent', label: 'a description for search results (meta description) on /' },
+      whyItMatters: 'People choosing between results see nothing about you.',
+      theFix: 'Write one sentence saying what you do and where.',
+      effort: 'ten_minutes',
+      selfServe: true,
+    },
+  ],
+  areas: [
+    {
+      key: 'found',
+      name: 'Found',
       assessed: true,
       score: 6,
       status: 'Needs Improvement',
-      weight: 0.3,
-      findings: [{ text: 'The offer is stated late.', evidence: { pageUrl: `${SITE}/`, quote: 'We do many things' } }],
-      recommendations: ['Say what you do in the first line.'],
+      weight: 0.2,
+      line: 'Search engines can read you, but your link looks bare when shared.',
+      findings: [{ text: 'The offer is stated late.', evidence: { kind: 'quote', pageUrl: `${SITE}/`, quote: 'We do many things for many people' } }],
     },
-    { name: 'Performance', assessed: false, reason: NOT_ASSESSED_SENTENCE },
+    { key: 'speed', name: 'Speed', assessed: false, reason: NOT_MEASURED_SENTENCE },
   ],
-  topStrengths: [{ title: 'Clear offer', description: 'Fixture.', evidence: { pageUrl: `${SITE}/`, quote: 'We fix leaks and drains across the county' } }],
-  criticalIssues: [
-    { title: 'No booking path', description: 'Fixture.', impact: 'Fixture.', evidence: { pageUrl: `${SITE}/`, absent: 'a meta description' } },
-  ],
-  actionPlan: { quickWins: [], shortTerm: [], strategic: [] },
+  phoneCallouts: [],
   pagesRead: [`${SITE}/`],
+  linksChecked: 0,
   droppedFindings: 0,
 } satisfies AuditResults
+
+// A report with every kind of evidence in it, both kinds of unassessed area, the home-care name and call-outs:
+// what the .docx and the emails must be able to render.
+export const REPORT_SITE = 'https://doc.example.test'
+export const EVIL_QUOTE = 'Call now <script>alert("x")</script> & save today'
+export const reportFixture: AuditResults = {
+  success: true,
+  websiteUrl: REPORT_SITE,
+  auditDate: '2026-11-10T00:00:00.000Z',
+  niche: 'home_care',
+  overallScore: 7.2,
+  overallStatus: 'Good',
+  whereYouStand: 'Families can reach you in one tap; caregivers cannot find where to apply.',
+  working: [
+    { title: 'A number to tap', line: 'A family on a phone can call you in one tap.', evidence: { kind: 'quote', pageUrl: `${REPORT_SITE}/`, quote: EVIL_QUOTE } },
+    { title: 'Your links answer', line: 'Nothing we tried on your own site was broken.', evidence: { kind: 'counted', text: 'all 18 links we checked on your own site answered' } },
+  ],
+  fixes: [
+    {
+      headline: 'Give caregivers a way to apply',
+      whatWeSaw: 'There is no careers or apply link on the pages we read.',
+      evidence: { kind: 'absent', label: 'a careers or apply link' },
+      whyItMatters: 'You grow only as fast as you hire.',
+      theFix: 'Add an Apply link to the top of every page.',
+      effort: 'ten_minutes',
+      selfServe: true,
+    },
+    {
+      headline: 'Say who pays for care',
+      whatWeSaw: 'Your services page mentions cost in one line.',
+      evidence: { kind: 'quote', pageUrl: `${REPORT_SITE}/services?x=1`, quote: 'Ask us about <b>payment</b> options today' },
+      whyItMatters: 'A referrer needs to know what you accept before they call.',
+      theFix: 'List the ways care can be paid for.',
+      effort: 'an_afternoon',
+      selfServe: true,
+    },
+    {
+      headline: 'Shorten the home page title',
+      whatWeSaw: 'The title is longer than search results show.',
+      evidence: { kind: 'counted', text: 'your home page title is 96 characters long' },
+      whyItMatters: 'The town you serve is cut off in search results.',
+      theFix: 'Put the service and the town in the first 60 characters.',
+      effort: 'a_project',
+      selfServe: false,
+    },
+  ],
+  areas: [
+    {
+      key: 'found',
+      name: 'Found',
+      assessed: true,
+      score: 8,
+      status: 'Good',
+      weight: 0.2,
+      line: 'Search engines can read you; your link looks bare when shared.',
+      findings: [
+        { text: 'No picture goes with your link when it is shared.', evidence: { kind: 'absent', label: 'a picture for when your home page is shared (Open Graph image)' } },
+        { text: 'The About page names the town.', evidence: { kind: 'quote', pageUrl: `${REPORT_SITE}/about`, quote: 'Serving the county since 1998 with care' } },
+      ],
+    },
+    {
+      key: 'first_impression',
+      name: 'First impression',
+      assessed: true,
+      score: 7,
+      status: 'Good',
+      weight: 0.2,
+      line: 'It is clear at once that this is care at home.',
+      findings: [{ text: 'The photo at the top shows a caregiver with a client.', evidence: { kind: 'screen' } }],
+    },
+    { key: 'speed', name: 'Speed', assessed: false, reason: NOT_MEASURED_SENTENCE },
+    {
+      key: 'next_step',
+      name: 'Two clear doors',
+      assessed: true,
+      score: 5,
+      status: 'Needs Improvement',
+      weight: 0.25,
+      line: 'The door for families is open; the door for caregivers is missing.',
+      findings: [{ text: 'Some of your own links do not answer.', evidence: { kind: 'counted', text: '3 of the 18 links we checked on your own site answered with an error' } }],
+    },
+    { key: 'trust', name: 'Trust', assessed: false, reason: UNSUPPORTED_SENTENCE },
+  ],
+  phoneCallouts: [{ title: 'The number is easy to tap', line: 'It sits at the top, large enough for a thumb.' }],
+  pagesRead: [`${REPORT_SITE}/`, `${REPORT_SITE}/about`, `${REPORT_SITE}/services?x=1`],
+  linksChecked: 18,
+  droppedFindings: 2,
+}
 
 // The text of a .docx's main part (word/document.xml), read straight from the zip with node:zlib.
 export function docxXml(docx: Buffer): string {

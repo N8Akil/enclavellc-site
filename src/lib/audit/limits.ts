@@ -18,7 +18,9 @@
 //                                             never touches that ceiling, and leads are only bounded by 200 a
 //                                             day. The hourly limit is what bounds how FAST anything at all,
 //                                             leads included, can be made to happen through this form.
-//   - 30 audits started per UTC day, or AUDIT_DAILY_LIMIT if it is a positive integer
+//   - 30 audits started per UTC day, or AUDIT_DAILY_LIMIT if it is a positive integer. A slot is spent only by an
+//                                             audit admitted to run or to wait in the queue: the route gives the
+//                                             slot back (returnAuditSlot) when the request is not admitted after all
 //   - 200 lead emails per UTC day (a request that is not run automatically; it never uses the 30)
 //
 // Nothing here is logged. Keys are SHA-256 hashes of the client bucket and of the normalised email, and a key is
@@ -200,6 +202,19 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
     return true;
   }
 
+  // Gives back ONE of today's audit slots, taken by an allowed check() whose audit was then not admitted (the queue
+  // was full, or the request failed before it was accepted). Only today's count is ever lowered, never below zero:
+  // a slot taken before the UTC day changed belongs to a count that is gone already. The per-person and hourly
+  // counts are not touched: the attempt still happened.
+  function giveBackAuditSlot(): void {
+    if (isClusterWorker()) return;
+    const t = now();
+    if (!Number.isFinite(t)) return;
+    if (!Number.isSafeInteger(daily.day) || !Number.isSafeInteger(daily.count) || daily.count < 1) return;
+    if (Math.floor(t / DAY_MS) !== daily.day) return;
+    daily.count -= 1;
+  }
+
   return {
     // Checks every limit and, when all pass, counts the attempt. A refused attempt is not counted.
     check(ip: string, email: string, options: { audit?: boolean } = {}): LimitDecision {
@@ -208,6 +223,15 @@ export function createAuditLimiter(options: AuditLimiterOptions = {}) {
       } catch {
         // fail closed
         return { allowed: false, cause: 'daily' };
+      }
+    },
+    // The caller took an audit slot with check() and the audit was NOT admitted: the slot goes back. Call it at
+    // most once per slot taken (the route keeps a flag for that).
+    returnAuditSlot(): void {
+      try {
+        giveBackAuditSlot();
+      } catch {
+        // nothing given back: the safe direction (the slot stays spent)
       }
     },
     // May one more lead email go to the admin address today? Counts it when the answer is yes.

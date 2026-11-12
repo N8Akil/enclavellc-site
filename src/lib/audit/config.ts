@@ -20,31 +20,72 @@ export const TOTAL_TEXT_CAP = 60_000;
 export const MAX_LINKED_PAGES = 10;
 export const TRUNCATION_MARKER = '[truncated]';
 
-// The four areas the free audit can honestly score from page text. Weights sum to 1.
-export const ASSESSED_CATEGORIES = [
-  { key: 'content_quality', name: 'Content Quality', weight: 0.3 },
-  { key: 'seo', name: 'SEO Fundamentals', weight: 0.25 },
-  { key: 'structure_cta', name: 'Structure & Calls to Action', weight: 0.25 },
-  { key: 'trust_signals', name: 'Trust Signals', weight: 0.2 },
+// Who the audit is written for. "home_care" changes one printed area name, adds the home-care checks and a short
+// block in the prompt; the schema and every check are the same.
+export const NICHES = ['general', 'home_care'] as const;
+export type Niche = (typeof NICHES)[number];
+
+// The five areas. Weights sum to 1; the overall score is their weighted average over the areas that were assessed.
+export const AREAS = [
+  { key: 'found', name: 'Found', weight: 0.2 },
+  { key: 'first_impression', name: 'First impression', weight: 0.2 },
+  { key: 'speed', name: 'Speed', weight: 0.2 },
+  { key: 'next_step', name: 'Clear next step', weight: 0.25 },
+  { key: 'trust', name: 'Trust', weight: 0.15 },
 ] as const;
 
-export type AssessedKey = (typeof ASSESSED_CATEGORIES)[number]['key'];
-export const ASSESSED_KEYS = ASSESSED_CATEGORIES.map((c) => c.key) as [AssessedKey, ...AssessedKey[]];
+export type AreaKey = (typeof AREAS)[number]['key'];
+export const AREA_KEYS = AREAS.map((a) => a.key) as [AreaKey, ...AreaKey[]];
 
-// Areas that need a rendered page. They are listed in every report, never scored.
-export const UNASSESSED_CATEGORIES = [
-  'Visual Design & Branding',
-  'Mobile Responsiveness',
-  'Performance',
-  'Accessibility',
-] as const;
+// The name printed for an area. One differs by niche: a home-care site has two doors (families, caregivers).
+export function areaName(key: AreaKey, niche: Niche): string {
+  if (key === 'next_step' && niche === 'home_care') return 'Two clear doors';
+  return AREAS.find((a) => a.key === key)!.name;
+}
 
 // Fixed sentences, written here and never by the model.
-export const NOT_ASSESSED_LABEL = 'Not assessed in the free audit';
-export const NOT_ASSESSED_SENTENCE =
-  'Not assessed in the free audit. It needs the page rendered in a browser, which the full review includes.';
+export const NOT_ASSESSED_LABEL = 'Not assessed';
+// Speed needs a measurement from outside this code. Without one it is never guessed.
+export const NOT_MEASURED_SENTENCE = 'Not measured in this audit.';
 export const UNSUPPORTED_SENTENCE =
   'The automated read could not support its findings for this area; it was left out rather than guessed.';
+
+// What the model may return, in characters. A string over its limit makes the whole reply a miss: nothing is
+// shortened or cut to fit. (The one cut code makes is the ranking cut of findings to MAX_FINDINGS.)
+export const LIMITS = {
+  whereYouStand: 110,
+  workingTitle: 45,
+  workingLine: 120,
+  fixHeadline: 70,
+  fixWhatWeSaw: 170,
+  fixWhyItMatters: 130,
+  fixTheFix: 110,
+  areaLine: 120,
+  findingText: 170,
+  calloutTitle: 45,
+  calloutLine: 90,
+} as const;
+export const WORKING_COUNT = 2;
+export const FIX_COUNT = 3;
+export const MAX_FINDINGS_PER_AREA = 3;
+export const MAX_FINDINGS = 9;
+export const MAX_CALLOUTS = 3;
+export const MAX_SCREEN_EVIDENCE = 3;
+
+export const EFFORTS = ['ten_minutes', 'an_afternoon', 'a_project'] as const;
+export type Effort = (typeof EFFORTS)[number];
+export const EFFORT_LABELS: Record<Effort, string> = {
+  ten_minutes: 'Ten minutes',
+  an_afternoon: 'An afternoon',
+  a_project: 'A project',
+};
+
+// Links on the audited site's own host whose status is checked, at most.
+export const MAX_LINK_CHECKS = 20;
+
+// The background run: audits running at once, and waiting, in this one process. Past that a request becomes a lead.
+export const QUEUE_MAX_RUNNING = 2;
+export const QUEUE_MAX_WAITING = 5;
 
 export const THRESHOLDS = { excellent: 9, good: 7, needs_improvement: 5, critical: 0 } as const;
 
@@ -92,3 +133,6 @@ export const FETCH_TIMEOUT_MS = 10_000;
 export const FETCH_MAX_BYTES = 2 * 1024 * 1024;
 export const FETCH_MAX_REDIRECTS = 5;
 export const AUDIT_FETCH_DEADLINE_MS = 45_000;
+// Requests to the audited site per audit, every hop of every request counted (pages, files, probes, link checks,
+// redirects). Past it, what is left to ask ends as unknown.
+export const MAX_SITE_REQUESTS = 60;

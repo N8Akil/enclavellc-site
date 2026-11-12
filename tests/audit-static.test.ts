@@ -8,6 +8,10 @@ import { describe, expect, it } from 'vitest'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const GUARDED_DIRS = ['src/lib/audit', 'src/app/api/audit']
 const THE_GUARD = 'src/lib/audit/safe-fetch.ts'
+// The ONE exception: Google's PageSpeed test is a fixed, trusted host, not the audited site, so it does not go
+// through the guard. It is allowed in this file only, through one reference to the platform's fetch, to one
+// fixed endpoint (checked below).
+const PAGESPEED = 'src/lib/audit/pagespeed.ts'
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -43,10 +47,20 @@ describe('nothing in the audit code reaches the network around the guard', () =>
     expect(files.map((f) => f.name)).toContain('src/app/api/audit/generate/route.ts')
   })
 
-  it.each(files.map((f) => [f.name, f.text]))('%s has no bare fetch( call', (_, text) => {
+  it.each(files.map((f) => [f.name, f.text]))('%s has no bare fetch( call', (name, text) => {
     expect(text).not.toMatch(BARE_FETCH)
-    expect(text).not.toMatch(GLOBAL_FETCH)
+    if (name !== PAGESPEED) expect(text).not.toMatch(GLOBAL_FETCH)
     expect(text).not.toMatch(XHR)
+  })
+
+  it('the PageSpeed exception is exactly one request, to Google\'s fixed endpoint, with redirects refused', () => {
+    const text = files.find((f) => f.name === PAGESPEED)!.text
+    const globals = text.match(new RegExp(GLOBAL_FETCH.source, 'g')) ?? []
+    expect(globals).toEqual(['globalThis.fetch'])
+    expect(text).toContain('(options.fetch ?? globalThis.fetch)(pageSpeedRequestUrl(address), {')
+    expect(text).toContain("export const PAGESPEED_ENDPOINT = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';")
+    expect(text).toContain('return `${PAGESPEED_ENDPOINT}?${params.toString()}`;')
+    expect(text).toContain("redirect: 'error'")
   })
 
   it.each(files.filter((f) => f.name !== THE_GUARD).map((f) => [f.name, f.text]))('%s imports no HTTP or socket client of its own', (_, text) => {
@@ -91,5 +105,24 @@ describe('nothing in the audit code reaches the network around the guard', () =>
     expect(guard).toMatch(/lookup:\s*pinnedLookup/)
     expect(guard).toMatch(/agent:\s*false/)
     expect(guard).not.toMatch(BARE_FETCH)
+  })
+})
+
+// The two things that must exist before the preview gate is removed are written down in the RUNBOOK and in preview.ts.
+// Deleting either sentence would let the gate be removed without them.
+describe('the preview gate keeps both of its removal conditions in writing', () => {
+  const runbook = readFileSync(join(root, 'docs/audit-system/RUNBOOK.md'), 'utf8').replace(/\s+/g, ' ')
+  const previewSource = readFileSync(join(root, 'src/lib/audit/preview.ts'), 'utf8').replace(/\/\/ ?/g, '').replace(/\s+/g, ' ')
+  const SIGTERM_BLOCKER = 'On SIGTERM, mail the admin the audits in flight (visitor address and site URL) before the process exits.'
+  const PROOF_BLOCKER =
+    "The automated report goes only to an address the visitor has proved they hold (a confirmation link or code sent to that address first), with a test. Until then, an audit of a hostile page could mail that page's words, from audits@, to any address typed into the form."
+  it('the RUNBOOK says both', () => {
+    expect(runbook).toContain(SIGTERM_BLOCKER)
+    expect(runbook).toContain(PROOF_BLOCKER)
+  })
+  it('preview.ts names both', () => {
+    expect(previewSource).toContain('On SIGTERM the admin must be mailed the audits in flight')
+    expect(previewSource).toContain('the automated report goes only to an address the visitor has proved they hold')
+    expect(previewSource).toContain("mail that page's words, from audits@, to any address typed into the form")
   })
 })

@@ -101,7 +101,8 @@ export function NightAuditForm({ variant = 'end' }: { variant?: 'hero' | 'end' }
       if (data.success) {
         setStatus('success')
         // while the free audit is in preview the API says what will really happen: show its words, not ours
-        setResultMessage(data.preview && typeof data.message === 'string' ? data.message : `Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
+        // (an accepted audit carries the API's own sentence too: it promises no time, where ours did)
+        setResultMessage((data.preview === true || data.accepted === true) && typeof data.message === 'string' ? data.message : `Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
         reset()
         shareTypedUrl('')
       } else {

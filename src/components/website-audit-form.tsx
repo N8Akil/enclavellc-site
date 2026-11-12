@@ -62,7 +62,8 @@ export function WebsiteAuditForm() {
             if (data.success) {
                 setStatus('success')
                 // while the free audit is in preview the API says what will really happen: show its words, not ours
-                const preview = data.preview === true && typeof data.message === 'string'
+                // (an accepted audit also carries the API's own sentence: it promises no time, where ours did)
+                const preview = (data.preview === true || data.accepted === true) && typeof data.message === 'string'
                 setIsPreview(preview)
                 setResultMessage(preview ? data.message : `Your professional audit document is being delivered to ${values.userEmail}. Check your inbox in 2-3 minutes!`)
                 toast.success(preview ? "Request received." : "Audit sent! Check your inbox.")

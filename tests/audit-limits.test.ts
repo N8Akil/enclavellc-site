@@ -167,6 +167,29 @@ describe('audit limits', () => {
     expect(limiter.check(ip(902), email(902))).toEqual({ allowed: true })
   })
 
+  it('returnAuditSlot gives back one of today\'s audit slots, never below zero, and not the per-person count', () => {
+    const { limiter } = setup(MIDNIGHT + 22 * HOUR, 2)
+    expect(limiter.check(ip(1), email(1))).toEqual({ allowed: true })
+    expect(limiter.check(ip(2), email(2))).toEqual({ allowed: true })
+    expect(limiter.check(ip(3), email(3))).toMatchObject({ allowed: false, cause: 'daily' })
+    // one given back: exactly one more audit fits
+    limiter.returnAuditSlot()
+    expect(limiter.check(ip(4), email(4))).toEqual({ allowed: true })
+    expect(limiter.check(ip(5), email(5))).toMatchObject({ allowed: false, cause: 'daily' })
+    // giving back more than was taken does not make room beyond the ceiling
+    for (let i = 0; i < 5; i++) limiter.returnAuditSlot()
+    expect(limiter.check(ip(6), email(6))).toEqual({ allowed: true })
+    expect(limiter.check(ip(7), email(7))).toEqual({ allowed: true })
+    expect(limiter.check(ip(8), email(8))).toMatchObject({ allowed: false, cause: 'daily' })
+    // the per-person count stays: the attempt happened
+    const same = setup(MIDNIGHT + 9 * HOUR, 1_000_000)
+    for (let i = 0; i < 3; i++) {
+      expect(same.limiter.check('203.0.113.9', email(10 + i))).toEqual({ allowed: true })
+      same.limiter.returnAuditSlot()
+    }
+    expect(same.limiter.check('203.0.113.9', email(20))).toMatchObject({ allowed: false, cause: 'ip' })
+  })
+
   it('a refused request is not counted, so being refused does not extend the wait', () => {
     const { clock, limiter } = setup()
     for (let i = 0; i < 3; i++) limiter.check('203.0.113.9', email(i))
