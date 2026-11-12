@@ -10,7 +10,7 @@ vi.mock('resend', () => ({
 
 import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
 import { LEAD_INS, evidenceLine } from '@/lib/audit/present'
-import { sendAuditEmails } from '@/lib/audit/send-emails'
+import { reportFilename, sendAuditEmails } from '@/lib/audit/send-emails'
 import { escapeHtml } from '@/lib/email/escape'
 import type { AuditResults } from '@/lib/audit/types'
 
@@ -279,5 +279,37 @@ describe('[P3-14] the score colour follows the status label', () => {
     // the visitor's score badge, and the score in the admin's copy
     expect(send.mock.calls[0][0].html).toContain(`background-color: ${colour}; color: white; font-size: 48px`)
     expect(send.mock.calls[1][0].html).toContain(`<span style="color: ${colour}; font-weight: bold; font-size: 18px;">`)
+  })
+})
+
+describe('reportFilename', () => {
+  it.each([
+    ['https://example.com', 'example.com-website-audit.pdf'],
+    ['https://WWW.Example.COM/path?q=1', 'www.example.com-website-audit.pdf'],
+    ['https://exa_mple.com', 'exa-mple.com-website-audit.pdf'],
+    ["https://a'b.example.com", 'a-b.example.com-website-audit.pdf'],
+    ['https://a;b.example.com', 'a-b.example.com-website-audit.pdf'],
+    ['https://a"b.example.com', 'a-b.example.com-website-audit.pdf'],
+    ['https://[2606:4700::1111]/', '2606-4700-1111-website-audit.pdf'],
+    ['https://example.com./', 'example.com-website-audit.pdf'],
+    ['https://bücher.example/', 'xn--bcher-kva.example-website-audit.pdf'],
+    ['https://a__b..c.com', 'a-b..c.com-website-audit.pdf'],
+  ])('%s -> %s', (url, expected) => {
+    expect(reportFilename(url)).toBe(expected)
+  })
+
+  it('keeps only lowercase letters, digits, dots and hyphens, capped in length, whatever the host holds', () => {
+    for (const url of ['https://' + 'a'.repeat(200) + '.example.com', 'https://a_b;c"d\'e.example.com', 'https://[::1]', 'https://-a-.example']) {
+      const name = reportFilename(url)
+      expect(name).toMatch(/^[a-z0-9][a-z0-9.-]*\.pdf$|^website-audit\.pdf$/)
+      expect(name.length).toBeLessThanOrEqual(60 + '-website-audit.pdf'.length)
+      expect(name).not.toMatch(/^[.-]|[.-]-website|[^a-z0-9.-]/)
+    }
+  })
+
+  it('falls back to a plain name when the host has nothing usable, or the URL cannot be read', () => {
+    expect(reportFilename('https://___.___')).toBe('website-audit.pdf')
+    expect(reportFilename('')).toBe('website-audit.pdf')
+    expect(reportFilename('not a url')).toBe('website-audit.pdf')
   })
 })

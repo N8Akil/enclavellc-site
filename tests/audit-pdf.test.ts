@@ -1,8 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { deflateSync } from 'node:zlib'
-import { PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib'
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib'
 import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
-import { generateAuditPdf } from '@/lib/audit/generate-pdf'
+import { barFill, generateAuditPdf } from '@/lib/audit/generate-pdf'
 import { howMadeText } from '@/lib/audit/present'
 import type { AuditResults, Evidence } from '@/lib/audit/types'
 import { REPORT_SITE, reportFixture } from './helpers'
@@ -135,6 +135,25 @@ function makePng(width: number, height: number): string {
 }
 const JPEG_SHOT = { mediaType: 'image/jpeg', dataBase64: JPEG_BASE64 }
 const PNG_SHOT = { mediaType: 'image/png', dataBase64: makePng(36, 64) }
+// a PNG that says it is w x h and holds no pixels: enough to be read for its size, nothing a decoder would accept
+function headerOnlyPng(width: number, height: number): string {
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+  const ihdr = Buffer.alloc(25)
+  ihdr.writeUInt32BE(13, 0)
+  ihdr.write('IHDR', 4)
+  ihdr.writeUInt32BE(width, 8)
+  ihdr.writeUInt32BE(height, 12)
+  ihdr[16] = 8
+  ihdr[17] = 2
+  return Buffer.concat([sig, ihdr, Buffer.from('IDAT-not-a-real-chunk')]).toString('base64')
+}
+// the JPEG above with its start-of-frame width set to w
+function jpegWithWidth(width: number): string {
+  const bytes = Buffer.from(JPEG_BASE64, 'base64')
+  const at = bytes.indexOf(Buffer.from([0xff, 0xc0, 0x00, 0x11, 0x08]))
+  bytes.writeUInt16BE(width, at + 7)
+  return bytes.toString('base64')
+}
 const WEBP_SHOT = { mediaType: 'image/webp', dataBase64: Buffer.from('RIFF\0\0\0\0WEBPVP8 ').toString('base64') }
 
 // how many picture objects the PDF holds, and the page numbers (from 1) whose resources use one
@@ -290,6 +309,44 @@ describe('generateAuditPdf', () => {
     expect(squash(pages[0].text)).toContain('DanaOrtiz')
   })
 
+  it('a URL over 1,000 characters is cut on the cover, with an ellipsis, and the score block and footer stay clear of it', async () => {
+    const tail = 'zz-the-very-end-of-the-address'
+    const longUrl = `${SITE}/${'q'.repeat(1200)}${tail}`
+    const results: AuditResults = { ...allAssessed, websiteUrl: longUrl }
+    const bytes = await generateAuditPdf(results)
+    const pages = await extract(bytes)
+    const cover = pages[0].text
+    expect(cover).not.toContain(tail)
+    expect(cover).toContain(SITE)
+    expect(cover).toContain('…')
+    expect(pages[0].lines).toContain('6.5/10')
+    expect(cover).toContain('enclavellc.net')
+    // the cover's address lines all sit above the score block (higher on the page than the "Score for" label)
+    const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+    const doc = await pdfjs.getDocument({ data: bytes.slice(), disableFontFace: true, useSystemFonts: false }).promise
+    const items = (await (await doc.getPage(1)).getTextContent()).items.filter((i) => 'str' in i && i.str.trim() !== '') as Array<{ str: string; transform: number[] }>
+    const label = items.find((i) => i.str.includes('SCORE'))
+    expect(label).toBeDefined()
+    const qLines = items.filter((i) => /q{10}/.test(i.str))
+    expect(qLines.length).toBeGreaterThan(0)
+    for (const q of qLines) expect(q.transform[5]).toBeGreaterThan(label!.transform[5] + 100)
+  })
+
+  it('invisible characters beyond the C0/C1 controls (line and paragraph separators, variation selectors, tag characters, Mongolian and Arabic marks) take no room on the page', async () => {
+    const hidden = '\u2028\u2029\uFE00\uFE0F\u180E\u061C\u{E0041}\u{E007F}'
+    const plain: AuditResults = { ...allAssessed, whereYouStand: 'People who find you can reach you.' }
+    const dirty: AuditResults = { ...allAssessed, whereYouStand: `People${hidden} who${hidden} find you can${hidden} reach you.${hidden}` }
+    // what a reader finds: each text item's string and drawn width; a glyph kept for a hidden character shows as extra width or an extra item
+    async function items(results: AuditResults, userName: string) {
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const doc = await pdfjs.getDocument({ data: (await generateAuditPdf(results, { userName })).slice(), disableFontFace: true, useSystemFonts: false }).promise
+      const content = await (await doc.getPage(1)).getTextContent()
+      const out = content.items.filter((i) => 'str' in i && i.str !== '').map((i) => `${(i as { str: string }).str}|${Math.round((i as { width: number }).width * 100)}`)
+      return out
+    }
+    expect(await items(dirty, `Dana${hidden} Ortiz`)).toEqual(await items(plain, 'Dana Ortiz'))
+  })
+
   it('a very long quote flows onto further pages and is never cut', async () => {
     const short = await PDFDocument.load(await generateAuditPdf(reportFixture))
     const long = await PDFDocument.load(await generateAuditPdf(homeCareLong))
@@ -310,37 +367,55 @@ describe('generateAuditPdf', () => {
     expect(bodyOf(pages)).toContain(squash('Families can reach you in one tap; caregivers cannot find where to apply.'))
   })
 
-  it(`the "${WAITING}" slot is printed if and only if Speed is not assessed, beside the not-measured sentence`, async () => {
-    const without = bodyOf(await extract(await generateAuditPdf(reportFixture)))
-    expect(without).toContain(squash(WAITING))
-    expect(without).toContain(squash(NOT_MEASURED_SENTENCE))
+  // the printed text of the page of the five areas, from its heading on, squashed
+  async function areasText(results: AuditResults): Promise<string> {
+    const text = bodyOf(await extract(await generateAuditPdf(results)))
+    return text.slice(text.indexOf(squash('FIVE QUESTIONS')))
+  }
+  const count = (haystack: string, needle: string) => haystack.split(needle).length - 1
+
+  it(`the "${WAITING}" slot is printed exactly once, under Speed, only when Speed was not measured`, async () => {
+    const without = await areasText(reportFixture)
+    expect(count(without, squash(WAITING)), 'one waiting slot').toBe(1)
+    const speedAt = without.indexOf(squash('SPEED'))
+    const slotAt = without.indexOf(squash(WAITING))
+    const nextAt = without.indexOf(squash('TWO CLEAR DOORS'))
+    expect(speedAt, 'Speed row is present').toBeGreaterThan(-1)
+    expect(slotAt, 'the slot follows the Speed name').toBeGreaterThan(speedAt)
+    expect(slotAt, 'the slot precedes the next area').toBeLessThan(nextAt)
+    expect(without.slice(speedAt, slotAt)).toContain(squash(NOT_MEASURED_SENTENCE))
     expect(without).toContain(squash(UNSUPPORTED_SENTENCE))
     const withSpeed = bodyOf(await extract(await generateAuditPdf(allAssessed)))
     expect(withSpeed).not.toContain(squash(WAITING))
     expect(withSpeed).not.toContain(squash(NOT_MEASURED_SENTENCE))
-    // Speed not assessed for a reason other than a missing measurement still waits on the speed test
-    const unsupported: AuditResults = { ...reportFixture, areas: reportFixture.areas.map((a) => (a.key === 'speed' ? { key: 'speed', name: 'Speed', assessed: false, reason: UNSUPPORTED_SENTENCE } : a)) }
-    expect(bodyOf(await extract(await generateAuditPdf(unsupported)))).toContain(squash(WAITING))
   })
 
-  it.each([
-    ['all assessed', allAssessed],
-    ['not measured', reportFixture],
-    ['long quote', homeCareLong],
-  ] as const)('%s: no number is printed that is not in the results (no placeholder, no sample score)', async (_, results) => {
-    const pages = await extract(await generateAuditPdf(results, { userName: 'Dana Ortiz' }))
-    // the numbers the results hold: their own text, the scores, the dates, the counts present.ts states
+  it('Speed unassessed after Google measured (unsupported findings) prints no "waiting" slot', async () => {
+    const unsupported: AuditResults = { ...reportFixture, areas: reportFixture.areas.map((a) => (a.key === 'speed' ? { key: 'speed', name: 'Speed', assessed: false, reason: UNSUPPORTED_SENTENCE } : a)) }
+    const text = await areasText(unsupported)
+    expect(count(text, squash(WAITING)), 'no waiting slot').toBe(0)
+    expect(text).toContain(squash(UNSUPPORTED_SENTENCE))
+  })
+
+  // Every digit run on every page must be one the results hold. Only two shapes are exempt, and each is bound to its place:
+  // the page footer "n / total" (n is this page's own number), and "/10" directly after a score the results hold.
+  // A fix's own number is a line of its own: the n-th such line must read n, in order, and there must be as many as fixes.
+  function expectNoInventedNumbers(pages: PageText[], results: AuditResults) {
     const allowed = new Set<string>(JSON.stringify(results).match(/\d+/g) ?? [])
     allowed.add(String(results.pagesRead.length))
     allowed.add(results.overallScore.toFixed(1))
     for (const n of results.overallScore.toFixed(1).match(/\d+/g) ?? []) allowed.add(n)
+    let nextFix = 1
     pages.forEach((page, index) => {
       for (const line of page.lines) {
-        // structure, not content: the page footer "2 / 5" and a fix's own number, each a line of its own
         if (line.replace(/^ENCLAVE\s*/, '') === `${index + 1} / ${pages.length}`) continue
-        if (/^[1-9]$/.test(line) && Number(line) <= results.fixes.length) continue
-        // a score on the scale: the score must be the results' own, the "/10" is the scale
-        const scored = line.match(/^(\d+(?:\.\d)?)\s*\/10$/)
+        if (/^\d$/.test(line) && Number(line) === nextFix && nextFix <= results.fixes.length) {
+          nextFix++
+          continue
+        }
+        // any other lone digit is a number with no place in the report, whatever the results hold
+        expect(/^\d$/.test(line), `lone digit line "${line}" on page ${index + 1}`).toBe(false)
+        const scored = line.match(/^(\d+(?:\.\d)?)\/10$/)
         if (scored) {
           expect(allowed.has(scored[1]), `score "${line}" on page ${index + 1}`).toBe(true)
           continue
@@ -348,6 +423,72 @@ describe('generateAuditPdf', () => {
         for (const n of line.match(/\d+/g) ?? []) expect(allowed.has(n), `"${n}" in "${line}" on page ${index + 1}`).toBe(true)
       }
     })
+    expect(nextFix - 1, 'one number line per fix').toBe(results.fixes.length)
+  }
+
+  it.each([
+    ['all assessed', allAssessed],
+    ['not measured', reportFixture],
+    ['long quote', homeCareLong],
+  ] as const)('%s: no number is printed that is not in the results (no placeholder, no sample score)', async (_, results) => {
+    expectNoInventedNumbers(await extract(await generateAuditPdf(results, { userName: 'Dana Ortiz' })), results)
+  })
+
+  // the ten-cell bars as drawn: each cell is a small filled path; filled cells are the ones not in the rule colour
+  async function drawnBars(bytes: Uint8Array): Promise<number[]> {
+    const doc = await PDFDocument.load(bytes)
+    const rows: number[] = []
+    let current: { y: string; filled: number; cells: number } | null = null
+    const cellRe = /([\d.]+) ([\d.]+) ([\d.]+) rg\n0 w\n\[\] 0 d\n1 0 0 1 ([\d.]+) ([\d.]+) cm\n1 0 0 1 0 0 cm\n1 0 0 1 0 0 cm\n0 0 m\n0 7 l\n8\.5 7 l\n8\.5 0 l\nh\nf\n/g
+    const LINE = [0xd3, 0xc8, 0xb6].map((v) => (v / 255).toFixed(4))
+    for (const page of doc.getPages()) {
+      const look = doc.context.lookup(page.node.get(PDFName.of('Contents')))
+      const streams = look instanceof PDFArray ? look.asArray().map((r) => doc.context.lookup(r)) : [look]
+      for (const stream of streams) {
+        const text = Buffer.from(decodePDFRawStream(stream as PDFRawStream).decode()).toString('latin1')
+        for (const m of text.matchAll(cellRe)) {
+          const filled = [m[1], m[2], m[3]].map((v) => Number(v).toFixed(4)).join() !== LINE.join()
+          if (!current || current.y !== m[5]) {
+            if (current) rows.push(current.filled)
+            current = { y: m[5], filled: 0, cells: 0 }
+          }
+          current.cells++
+          if (filled) current.filled++
+        }
+      }
+    }
+    if (current) rows.push(current.filled)
+    return rows
+  }
+
+  it.each([
+    ['all assessed', allAssessed],
+    ['not measured', reportFixture],
+  ] as const)('%s: each area prints its own score beside its own name, and its bar has exactly that many filled cells', async (_, results) => {
+    const bytes = await generateAuditPdf(results)
+    const pages = await extract(bytes)
+    const lines = pages.slice(1).flatMap((p) => p.lines)
+    const start = lines.findIndex((l) => l.includes('FIVE QUESTIONS'))
+    expect(start).toBeGreaterThan(-1)
+    const assessed = results.areas.filter((a) => a.assessed)
+    for (const area of results.areas) {
+      const at = lines.findIndex((l, i) => i > start && l === area.name.toUpperCase())
+      expect(at, `row of ${area.name}`).toBeGreaterThan(-1)
+      if (!area.assessed) continue
+      // the nearest score line above the name is this area's own
+      const before = lines.slice(start, at).reverse().find((l) => /^\d+\/10$/.test(l))
+      expect(before, `score printed for ${area.name}`).toBe(`${area.score}/10`)
+    }
+    const bars = await drawnBars(bytes)
+    expect(bars, 'one bar per assessed area, in order').toEqual(assessed.map((a) => (a.assessed ? barFill(a.score) : -1)))
+    expect(bars).toEqual(assessed.map((a) => (a.assessed ? Math.round(a.score) : -1)))
+    // the cover's score is the results' own overall score
+    expect(pages[0].lines).toContain(`${results.overallScore.toFixed(1)}/10`)
+  })
+
+  it('barFill: one cell per point, held to 0..10', () => {
+    expect([0, 4, 6.4, 6.5, 10].map(barFill)).toEqual([0, 4, 6, 7, 10])
+    expect([-3, 11.2].map(barFill)).toEqual([0, 10])
   })
 
   describe('the phone screenshot', () => {
@@ -380,6 +521,60 @@ describe('generateAuditPdf', () => {
       }
     })
 
+    it('a JPEG with no width: no picture, no caption, and the report is still made', async () => {
+      const bytes = await generateAuditPdf(withCallouts, { screenshot: { mediaType: 'image/jpeg', dataBase64: jpegWithWidth(0) } })
+      expect((await pictures(bytes)).count).toBe(0)
+      const body = bodyOf(await extract(bytes))
+      expect(body).not.toContain(squash(SHOT_CAPTION))
+      expect(body).toContain(squash('The call button is below the fold'))
+      expect(body).toContain(squash(allAssessed.areas[0].name.toUpperCase()))
+    })
+
+    it('a picture over the size cap is refused before anything is embedded', async () => {
+      const jpg = vi.spyOn(PDFDocument.prototype, 'embedJpg')
+      const png = vi.spyOn(PDFDocument.prototype, 'embedPng')
+      try {
+        for (const shot of [
+          { mediaType: 'image/png', dataBase64: headerOnlyPng(8000, 8000) },
+          { mediaType: 'image/png', dataBase64: headerOnlyPng(2001, 10) },
+          { mediaType: 'image/png', dataBase64: headerOnlyPng(0, 64) },
+          { mediaType: 'image/jpeg', dataBase64: jpegWithWidth(65535) },
+        ]) {
+          const started = Date.now()
+          const bytes = await generateAuditPdf(withCallouts, { screenshot: shot })
+          expect(Date.now() - started).toBeLessThan(5000)
+          expect((await pictures(bytes)).count).toBe(0)
+          expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
+        }
+        expect(png, 'embedPng not attempted').not.toHaveBeenCalled()
+        expect(jpg, 'embedJpg not attempted').not.toHaveBeenCalled()
+      } finally {
+        jpg.mockRestore()
+        png.mockRestore()
+      }
+    })
+
+    it('bytes whose signature disagrees with the declared type are never handed to the PDF library', async () => {
+      const jpg = vi.spyOn(PDFDocument.prototype, 'embedJpg')
+      const png = vi.spyOn(PDFDocument.prototype, 'embedPng')
+      try {
+        for (const shot of [{ mediaType: 'image/png', dataBase64: JPEG_BASE64 }, { mediaType: 'image/jpeg', dataBase64: PNG_SHOT.dataBase64 }]) {
+          const bytes = await generateAuditPdf(allAssessed, { screenshot: shot })
+          expect((await pictures(bytes)).count).toBe(0)
+          expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
+        }
+        expect(png).not.toHaveBeenCalled()
+        expect(jpg).not.toHaveBeenCalled()
+      } finally {
+        jpg.mockRestore()
+        png.mockRestore()
+      }
+    })
+
+    it('a picture at the cap is still drawn', async () => {
+      expect((await pictures(await generateAuditPdf(allAssessed, { screenshot: { mediaType: 'image/png', dataBase64: makePng(400, 700) } }))).count).toBe(1)
+    })
+
     it('the call-outs sit on the same page as the picture, and the picture is never split from its caption', async () => {
       const bytes = await generateAuditPdf(withCallouts, { screenshot: JPEG_SHOT })
       const found = await pictures(bytes)
@@ -398,20 +593,7 @@ describe('generateAuditPdf', () => {
 
     it('the caption has no digit, so no number is printed that is not in the results', async () => {
       expect(/\d/.test(SHOT_CAPTION)).toBe(false)
-      const results = withCallouts
-      const pages = await extract(await generateAuditPdf(results, { userName: 'Dana Ortiz', screenshot: PNG_SHOT }))
-      const allowed = new Set<string>(JSON.stringify(results).match(/\d+/g) ?? [])
-      allowed.add(String(results.pagesRead.length))
-      for (const n of results.overallScore.toFixed(1).match(/\d+/g) ?? []) allowed.add(n)
-      pages.forEach((page, index) => {
-        for (const line of page.lines) {
-          if (line.replace(/^ENCLAVE\s*/, '') === `${index + 1} / ${pages.length}`) continue
-          if (/^[1-9]$/.test(line) && Number(line) <= results.fixes.length) continue
-          const scored = line.match(/^(\d+(?:\.\d)?)\s*\/10$/)
-          if (scored) continue
-          for (const n of line.match(/\d+/g) ?? []) expect(allowed.has(n), `"${n}" in "${line}"`).toBe(true)
-        }
-      })
+      expectNoInventedNumbers(await extract(await generateAuditPdf(withCallouts, { userName: 'Dana Ortiz', screenshot: PNG_SHOT })), withCallouts)
     })
   })
 

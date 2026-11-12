@@ -11,7 +11,7 @@ import * as path from 'path';
 import fontkit from '@pdf-lib/fontkit';
 import { PDFDocument, rgb, type PDFFont, type PDFImage, type PDFPage, type RGB } from 'pdf-lib';
 import { HOW_MADE_HEADING, LEAD_INS, areasAssessedPhrase, effortLine, evidenceLine, howMadeText, notAssessedLabel } from './present';
-import type { ScoreStatus } from './config';
+import { NOT_MEASURED_SENTENCE, type ScoreStatus } from './config';
 import type { AssessedArea, AuditResults, Evidence, UnassessedArea } from './types';
 
 // ---------- the brand, on paper ----------
@@ -72,9 +72,10 @@ function fontFile(key: FontKey): Uint8Array {
 }
 
 // ---------- text that is safe to print ----------
-// Control and invisible formatting characters are removed (page quotes and the visitor's name can carry them);
+// Control and invisible formatting characters (zero-width and bidi marks, line and paragraph separators, variation
+// selectors, the tag block) are removed (page quotes and the visitor's name can carry them);
 // tabs and line breaks become spaces, because every string here is set as flowing text.
-const INVISIBLE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F­​-‏‪-‮⁠-⁤⁦-⁩﻿￾￿]/g;
+const INVISIBLE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F­​-‏‪-‮⁠-⁤⁦-⁩﻿￾￿\u061C\u180E\u2028\u2029\uFE00-\uFE0F]|\uDB40[\uDC00-\uDC7F]/g;
 function printable(text: string): string {
   return text.replace(/[\t\n\r]+/g, ' ').replace(INVISIBLE, '');
 }
@@ -85,6 +86,7 @@ function cleanDeep<T>(value: T): T {
   return value;
 }
 
+const COVER_URL_MAX = 200;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 // "10 Nov 2026", in UTC. A date that cannot be read prints nothing rather than a made-up one.
 function formatDate(iso: string): string {
@@ -353,7 +355,9 @@ function drawCover(doc: PDFDocument, f: Fonts, r: AuditResults, userName: string
 
   // the site: its address in mono gold, its name in large type, sized down until it fits in three lines
   let y = H - 150;
-  for (const line of wrap([{ text: r.websiteUrl, font: f.mono, size: 12, color: C.gold }], CW)) {
+  // the address is cut at 200 characters on the cover only, so a very long one cannot run into the score block
+  const coverUrl = r.websiteUrl.length > COVER_URL_MAX ? `${r.websiteUrl.slice(0, COVER_URL_MAX - 1)}…` : r.websiteUrl;
+  for (const line of wrap([{ text: coverUrl, font: f.mono, size: 12, color: C.gold }], CW)) {
     drawLine(page, line, ML, y);
     y -= 17;
   }
@@ -512,13 +516,58 @@ export interface PhoneShot {
 }
 export const PHONE_SHOT_CAPTION = "Your home page on a phone, as Google's test saw it.";
 
+// The picture's size is read from its own bytes before anything is embedded: a picture with no width or height, or one
+// large enough to cost seconds and hundreds of megabytes to decode, is left out.
+const SHOT_MAX_SIDE = 2000;
+const SHOT_MAX_PIXELS = 4_000_000;
+const PNG_MAGIC = [137, 80, 78, 71, 13, 10, 26, 10];
+
+export function readImageSize(bytes: Uint8Array, mediaType: string): { width: number; height: number } | null {
+  if (mediaType === 'image/png') {
+    // signature, then the IHDR chunk: length (4), "IHDR" (4), width (4), height (4)
+    if (bytes.length < 24 || !PNG_MAGIC.every((b, i) => bytes[i] === b)) return null;
+    if (String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]) !== 'IHDR') return null;
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+  }
+  if (mediaType === 'image/jpeg') {
+    if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return null;
+    // walk the marker segments to the first start-of-frame: marker (2), length (2), precision (1), height (2), width (2)
+    let i = 2;
+    while (i + 4 <= bytes.length) {
+      if (bytes[i] !== 0xff) return null;
+      const marker = bytes[i + 1];
+      if (marker === 0xff) {
+        i++;
+        continue;
+      }
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+        i += 2;
+        continue;
+      }
+      const length = (bytes[i + 2] << 8) | bytes[i + 3];
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        if (i + 9 > bytes.length) return null;
+        return { height: (bytes[i + 5] << 8) | bytes[i + 6], width: (bytes[i + 7] << 8) | bytes[i + 8] };
+      }
+      if (length < 2) return null;
+      i += 2 + length;
+    }
+  }
+  return null;
+}
+
 async function embedShot(doc: PDFDocument, shot: PhoneShot | undefined): Promise<PDFImage | null> {
   if (!shot || typeof shot.dataBase64 !== 'string') return null;
   try {
     // a copy that owns its memory: pdf-lib reads a Node Buffer's whole shared pool otherwise
     const bytes = Uint8Array.from(Buffer.from(shot.dataBase64, 'base64'));
-    if (shot.mediaType === 'image/jpeg' && bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return await doc.embedJpg(bytes);
-    if (shot.mediaType === 'image/png' && bytes.length > 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((b, i) => bytes[i] === b)) return await doc.embedPng(bytes);
+    // the bytes must be the type they say, and have a size we are willing to decode
+    const size = readImageSize(bytes, shot.mediaType);
+    if (!size || size.width < 1 || size.height < 1) return null;
+    if (size.width > SHOT_MAX_SIDE || size.height > SHOT_MAX_SIDE || size.width * size.height > SHOT_MAX_PIXELS) return null;
+    const image = shot.mediaType === 'image/jpeg' ? await doc.embedJpg(bytes) : await doc.embedPng(bytes);
+    return image.width > 0 && image.height > 0 ? image : null;
   } catch {
     // a picture that cannot be read is no picture
   }
@@ -579,13 +628,29 @@ function statusColor(status: ScoreStatus): RGB {
   if (status === 'Critical') return C.tally;
   return C.dim;
 }
+// how many of the ten cells of an area's bar are filled: one per point of its score
+export function barFill(score: number): number {
+  return Math.max(0, Math.min(10, Math.round(score)));
+}
 function barColor(status: ScoreStatus): RGB {
   if (status === 'Critical') return C.tally;
   if (status === 'Good' || status === 'Excellent') return C.goldInk;
   return C.ink;
 }
 
-function drawAreas(flow: Flow, f: Fonts, r: AuditResults, shot: PDFImage | null) {
+function drawAreas(flow: Flow, f: Fonts, r: AuditResults, image: PDFImage | null) {
+  // a picture that fails to draw costs the picture and its caption, never the report: the call-outs then print alone
+  let shot = image;
+  const drawShot = (): boolean => {
+    if (!shot) return false;
+    try {
+      drawPhoneShot(flow, f, shot, r.phoneCallouts);
+      return true;
+    } catch {
+      shot = null;
+      return false;
+    }
+  };
   flow.section('The five areas');
   flow.text([{ text: 'FIVE QUESTIONS A CUSTOMER ASKS WITHOUT SAYING THEM.', font: f.black, size: 30, color: C.ink }], { leading: 0.98, after: 16 });
 
@@ -597,9 +662,8 @@ function drawAreas(flow: Flow, f: Fonts, r: AuditResults, shot: PDFImage | null)
     // the phone picture, with its call-outs beside it, sits right above the First impression area
     if (shot && !shotDrawn && area.key === 'first_impression') {
       flow.gap(10);
-      drawPhoneShot(flow, f, shot, r.phoneCallouts);
+      shotDrawn = drawShot();
       flow.gap(18);
-      shotDrawn = true;
     }
     const assessed = area.assessed;
     const name: Run[] = [{ text: area.name.toUpperCase(), font: f.xbold, size: 20, color: C.ink }];
@@ -626,7 +690,7 @@ function drawAreas(flow: Flow, f: Fonts, r: AuditResults, shot: PDFImage | null)
       // ten cells, one per point
       const cell = (barW - 9 * 3) / 10;
       for (let i = 0; i < 10; i++) {
-        flow.page.drawRectangle({ x: W - MR - barW + i * (cell + 3), y: top - 14, width: cell, height: 7, color: i < Math.round(a.score) ? barColor(a.status) : C.line });
+        flow.page.drawRectangle({ x: W - MR - barW + i * (cell + 3), y: top - 14, width: cell, height: 7, color: i < barFill(a.score) ? barColor(a.status) : C.line });
       }
     } else {
       const u = area as UnassessedArea;
@@ -647,8 +711,9 @@ function drawAreas(flow: Flow, f: Fonts, r: AuditResults, shot: PDFImage | null)
     } else {
       const u = area as UnassessedArea;
       flow.text([{ text: u.reason, font: f.sans, size: BODY, color: C.dim }], { x: midX, width: CW - left, leading: 1.42, after: 8 });
-      if (u.key === 'speed') {
-        // the place the speed measurement will go, empty and saying so, until Google's test is wired in
+      if (u.key === 'speed' && u.reason === NOT_MEASURED_SENTENCE) {
+        // Google's test gave no measurement: the place it would go, empty and saying so. Speed unassessed for any other
+        // reason (measured, findings unsupported) shows its reason alone, as present.ts keys it
         flow.ensure(40);
         const label = "Waiting on Google's speed test";
         flow.page.drawRectangle({ x: midX, y: flow.y - 34, width: CW - left, height: 34, borderColor: C.dim, borderWidth: 0.9, borderDashArray: [3, 3] });
@@ -667,8 +732,9 @@ function drawAreas(flow: Flow, f: Fonts, r: AuditResults, shot: PDFImage | null)
   // picture could not be drawn
   if (shot && !shotDrawn) {
     flow.gap(10);
-    drawPhoneShot(flow, f, shot, r.phoneCallouts);
-  } else if (!shot && r.phoneCallouts.length > 0) {
+    shotDrawn = drawShot();
+  }
+  if (!shotDrawn && r.phoneCallouts.length > 0) {
     flow.gap(24);
     flow.eyebrow('Your site on a phone');
     for (const c of r.phoneCallouts) {

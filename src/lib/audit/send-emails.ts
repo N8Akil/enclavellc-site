@@ -22,9 +22,24 @@ export interface SendEmailsResult {
   error?: string;
 }
 
-// "example.com-website-audit.pdf": the site's host name, which a URL keeps to letters, digits, dots and hyphens
+// "example.com-website-audit.pdf". A URL's host can still hold underscores, quotes, semicolons, brackets (an IPv6
+// address) and a trailing dot, so the host is reduced to lowercase letters, digits, dots and hyphens: any other run
+// becomes one hyphen, leading and trailing dots and hyphens go, and it is cut at 60 characters. With nothing left
+// (or a URL that cannot be read) the name is "website-audit.pdf".
 export function reportFilename(websiteUrl: string): string {
-  return `${new URL(websiteUrl).hostname}-website-audit.pdf`;
+  let host = '';
+  try {
+    host = new URL(websiteUrl).hostname;
+  } catch {
+    // no readable host: the plain name
+  }
+  const safe = host
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]+/g, '-')
+    .replace(/^[.-]+/, '')
+    .slice(0, 60)
+    .replace(/[.-]+$/, '');
+  return safe ? `${safe}-website-audit.pdf` : 'website-audit.pdf';
 }
 
 export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendEmailsResult> {
