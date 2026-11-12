@@ -102,7 +102,11 @@ export async function runAuditJob(job: AuditJob, deps: PipelineDeps = {}): Promi
 
     stage = 'document';
     console.log(`${tag} generating document`);
-    const document = await (deps.makeDocument ?? generateAuditPdf)(result as AuditResults, { userName: job.userName });
+    const document = await (deps.makeDocument ?? generateAuditPdf)(result as AuditResults, {
+      userName: job.userName,
+      // the picture the model was shown, for the report only (never the email body, never the model again)
+      ...(measurements.ok === true && measurements.screenshot && (result as AuditResults).screenshotTaken ? { screenshot: measurements.screenshot } : {}),
+    });
 
     stage = 'email';
     console.log(`${tag} sending emails`);

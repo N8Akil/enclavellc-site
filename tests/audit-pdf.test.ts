@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { deflateSync } from 'node:zlib'
 import { PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib'
 import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
 import { generateAuditPdf } from '@/lib/audit/generate-pdf'
@@ -95,6 +96,60 @@ function embeddedFonts(doc: PDFDocument): string[] {
     names.push(String(obj.get(PDFName.of('FontName'))))
   }
   return names
+}
+
+// ---- the phone screenshot: tiny real images (36 x 64 pixels) ----
+const SHOT_CAPTION = "Your home page on a phone, as Google's test saw it."
+const JPEG_BASE64 = '/9j/4AAQSkZJRgABAQAASABIAAD/4QBMRXhpZgAATU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAA6ABAAMAAAABAAEAAKACAAQAAAABAAAAJKADAAQAAAABAAAAQAAAAAD/7QA4UGhvdG9zaG9wIDMuMAA4QklNBAQAAAAAAAA4QklNBCUAAAAAABDUHYzZjwCyBOmACZjs+EJ+/8AAEQgAQAAkAwEiAAIRAQMRAf/EAB8AAAEFAQEBAQEBAAAAAAAAAAABAgMEBQYHCAkKC//EALUQAAIBAwMCBAMFBQQEAAABfQECAwAEEQUSITFBBhNRYQcicRQygZGhCCNCscEVUtHwJDNicoIJChYXGBkaJSYnKCkqNDU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6g4SFhoeIiYqSk5SVlpeYmZqio6Slpqeoqaqys7S1tre4ubrCw8TFxsfIycrS09TV1tfY2drh4uPk5ebn6Onq8fLz9PX29/j5+v/EAB8BAAMBAQEBAQEBAQEAAAAAAAABAgMEBQYHCAkKC//EALURAAIBAgQEAwQHBQQEAAECdwABAgMRBAUhMQYSQVEHYXETIjKBCBRCkaGxwQkjM1LwFWJy0QoWJDThJfEXGBkaJicoKSo1Njc4OTpDREVGR0hJSlNUVVZXWFlaY2RlZmdoaWpzdHV2d3h5eoKDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uLj5OXm5+jp6vLz9PX29/j5+v/bAEMACQkJCQkJEAkJEBYQEBAWHhYWFhYeJh4eHh4eJi4mJiYmJiYuLi4uLi4uLjc3Nzc3N0BAQEBASEhISEhISEhISP/bAEMBCwwMEhESHxERH0szKjNLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS//dAAQAA//aAAwDAQACEQMRAD8Aw0WrSLUaLVtFr6GdU4MPIkRatotRotWkWuWdU93DyHheKXbUoXil21h7U9RSP//QoItW0Wo0WrSLXbOqeTh5EiLVtFqNFq2i1zTqnu4eQ4LxS7amC8Uu2sPanpqR/9FEWrSLUaLVtFrGdU8HDyJEWrSLTEWrSLXLOqe7h5DgvFLtqYLxS7ax9qempH//0riLVtFqNFq0i1406p8zh5EiLVtFqNFq2i1yzqnu4eQ4LxS7amC8Uu2sPanpqR//2Q=='
+function makePng(width: number, height: number): string {
+  const table = Array.from({ length: 256 }, (_, n) => {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    return c >>> 0
+  })
+  const crc = (b: Buffer) => {
+    let r = 0xffffffff
+    for (const x of b) r = table[(r ^ x) & 255] ^ (r >>> 8)
+    return (r ^ 0xffffffff) >>> 0
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const len = Buffer.alloc(4)
+    len.writeUInt32BE(data.length)
+    const body = Buffer.concat([Buffer.from(type), data])
+    const sum = Buffer.alloc(4)
+    sum.writeUInt32BE(crc(body))
+    return Buffer.concat([len, body, sum])
+  }
+  const rows: number[] = []
+  for (let y = 0; y < height; y++) {
+    rows.push(0)
+    for (let x = 0; x < width; x++) rows.push(40 + ((x * 5) % 200), 90 + ((y * 2) % 120), 200 - ((y * 2) % 120))
+  }
+  const head = Buffer.alloc(13)
+  head.writeUInt32BE(width, 0)
+  head.writeUInt32BE(height, 4)
+  head[8] = 8
+  head[9] = 2
+  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', head), chunk('IDAT', deflateSync(Buffer.from(rows))), chunk('IEND', Buffer.alloc(0))])
+  return png.toString('base64')
+}
+const JPEG_SHOT = { mediaType: 'image/jpeg', dataBase64: JPEG_BASE64 }
+const PNG_SHOT = { mediaType: 'image/png', dataBase64: makePng(36, 64) }
+const WEBP_SHOT = { mediaType: 'image/webp', dataBase64: Buffer.from('RIFF\0\0\0\0WEBPVP8 ').toString('base64') }
+
+// how many picture objects the PDF holds, and the page numbers (from 1) whose resources use one
+async function pictures(bytes: Uint8Array): Promise<{ count: number; pages: number[] }> {
+  const doc = await PDFDocument.load(bytes)
+  let count = 0
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    if (obj instanceof PDFRawStream && obj.dict.get(PDFName.of('Subtype'))?.toString() === '/Image') count++
+  }
+  const pages: number[] = []
+  doc.getPages().forEach((page, i) => {
+    const xobjects = page.node.Resources()?.lookupMaybe(PDFName.of('XObject'), PDFDict)
+    if (xobjects && xobjects.keys().length > 0) pages.push(i + 1)
+  })
+  return { count, pages }
 }
 
 const SITE = 'https://riverside-care.example.test'
@@ -292,6 +347,71 @@ describe('generateAuditPdf', () => {
         }
         for (const n of line.match(/\d+/g) ?? []) expect(allowed.has(n), `"${n}" in "${line}" on page ${index + 1}`).toBe(true)
       }
+    })
+  })
+
+  describe('the phone screenshot', () => {
+    const withCallouts: AuditResults = { ...allAssessed, phoneCallouts: [{ title: 'The call button is below the fold', line: 'On a phone the number sits under the first screen.' }] }
+
+    it.each([
+      ['JPEG', JPEG_SHOT],
+      ['PNG', PNG_SHOT],
+    ] as const)('%s: the picture is in the PDF, with its caption, on the page of the five areas', async (_, shot) => {
+      const bytes = await generateAuditPdf(allAssessed, { screenshot: shot })
+      const found = await pictures(bytes)
+      expect(found.count).toBe(1)
+      expect(found.pages).toHaveLength(1)
+      const pages = await extract(bytes)
+      expect(squash(pages[found.pages[0] - 1].body)).toContain(squash(SHOT_CAPTION))
+      expect(squash(pages[found.pages[0] - 1].body)).toContain(squash('FIVE QUESTIONS'))
+    })
+
+    it('without a screenshot there is no picture and no caption', async () => {
+      const bytes = await generateAuditPdf(allAssessed)
+      expect((await pictures(bytes)).count).toBe(0)
+      expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
+    })
+
+    it('WEBP (which the PDF library cannot hold), and bytes that are not the type they say, give no picture, no caption and no error', async () => {
+      for (const shot of [WEBP_SHOT, { mediaType: 'image/jpeg', dataBase64: Buffer.from('not a picture').toString('base64') }, { mediaType: 'image/png', dataBase64: JPEG_BASE64 }]) {
+        const bytes = await generateAuditPdf(allAssessed, { screenshot: shot })
+        expect((await pictures(bytes)).count).toBe(0)
+        expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
+      }
+    })
+
+    it('the call-outs sit on the same page as the picture, and the picture is never split from its caption', async () => {
+      const bytes = await generateAuditPdf(withCallouts, { screenshot: JPEG_SHOT })
+      const found = await pictures(bytes)
+      const pages = await extract(bytes)
+      const page = pages[found.pages[0] - 1]
+      expect(squash(page.body)).toContain(squash(SHOT_CAPTION))
+      expect(squash(page.body)).toContain(squash('The call button is below the fold'))
+      expect(squash(page.body)).toContain(squash('On a phone the number sits under the first screen.'))
+      expect(found.count).toBe(1)
+    })
+
+    it('with call-outs but no usable picture they are still printed, as before', async () => {
+      const bytes = await generateAuditPdf(withCallouts, { screenshot: WEBP_SHOT })
+      expect(bodyOf(await extract(bytes))).toContain(squash('The call button is below the fold'))
+    })
+
+    it('the caption has no digit, so no number is printed that is not in the results', async () => {
+      expect(/\d/.test(SHOT_CAPTION)).toBe(false)
+      const results = withCallouts
+      const pages = await extract(await generateAuditPdf(results, { userName: 'Dana Ortiz', screenshot: PNG_SHOT }))
+      const allowed = new Set<string>(JSON.stringify(results).match(/\d+/g) ?? [])
+      allowed.add(String(results.pagesRead.length))
+      for (const n of results.overallScore.toFixed(1).match(/\d+/g) ?? []) allowed.add(n)
+      pages.forEach((page, index) => {
+        for (const line of page.lines) {
+          if (line.replace(/^ENCLAVE\s*/, '') === `${index + 1} / ${pages.length}`) continue
+          if (/^[1-9]$/.test(line) && Number(line) <= results.fixes.length) continue
+          const scored = line.match(/^(\d+(?:\.\d)?)\s*\/10$/)
+          if (scored) continue
+          for (const n of line.match(/\d+/g) ?? []) expect(allowed.has(n), `"${n}" in "${line}"`).toBe(true)
+        }
+      })
     })
   })
 

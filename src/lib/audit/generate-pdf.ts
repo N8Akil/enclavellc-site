@@ -9,7 +9,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import fontkit from '@pdf-lib/fontkit';
-import { PDFDocument, rgb, type PDFFont, type PDFPage, type RGB } from 'pdf-lib';
+import { PDFDocument, rgb, type PDFFont, type PDFImage, type PDFPage, type RGB } from 'pdf-lib';
 import { HOW_MADE_HEADING, LEAD_INS, areasAssessedPhrase, effortLine, evidenceLine, howMadeText, notAssessedLabel } from './present';
 import type { ScoreStatus } from './config';
 import type { AssessedArea, AuditResults, Evidence, UnassessedArea } from './types';
@@ -503,6 +503,77 @@ function drawShortVersion(flow: Flow, f: Fonts, r: AuditResults) {
   }
 }
 
+// ---------- the phone screenshot ----------
+// Google's phone screenshot of the home page, drawn once, in a simple phone-shaped frame. pdf-lib holds JPEG and PNG
+// only; anything else (WEBP), or bytes that are not the type they say, is left out with no error and no caption.
+export interface PhoneShot {
+  mediaType: string;
+  dataBase64: string;
+}
+export const PHONE_SHOT_CAPTION = "Your home page on a phone, as Google's test saw it.";
+
+async function embedShot(doc: PDFDocument, shot: PhoneShot | undefined): Promise<PDFImage | null> {
+  if (!shot || typeof shot.dataBase64 !== 'string') return null;
+  try {
+    // a copy that owns its memory: pdf-lib reads a Node Buffer's whole shared pool otherwise
+    const bytes = Uint8Array.from(Buffer.from(shot.dataBase64, 'base64'));
+    if (shot.mediaType === 'image/jpeg' && bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return await doc.embedJpg(bytes);
+    if (shot.mediaType === 'image/png' && bytes.length > 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((b, i) => bytes[i] === b)) return await doc.embedPng(bytes);
+  } catch {
+    // a picture that cannot be read is no picture
+  }
+  return null;
+}
+
+// about 36% of the content width, a picture pixel being a point: never drawn larger than its own pixels
+const SHOT_FRAME_W = Math.round(CW * 0.36);
+const SHOT_PAD = 8;
+const SHOT_MAX_IMG_H = 380;
+
+function drawPhoneShot(flow: Flow, f: Fonts, image: PDFImage, callouts: AuditResults['phoneCallouts']) {
+  let w = Math.min(SHOT_FRAME_W - SHOT_PAD * 2, image.width);
+  let h = (w * image.height) / image.width;
+  if (h > SHOT_MAX_IMG_H) {
+    w = (w * SHOT_MAX_IMG_H) / h;
+    h = SHOT_MAX_IMG_H;
+  }
+  const frameW = w + SHOT_PAD * 2;
+  const frameH = h + SHOT_PAD * 2;
+  const caption = wrap([{ text: PHONE_SHOT_CAPTION, font: f.mono, size: MIN, color: C.dim }], frameW);
+  const captionH = caption.reduce((sum, line) => sum + line.size * 1.35, 0);
+  const sideX = ML + frameW + 26;
+  const sideW = CW - frameW - 26;
+  const sideRuns = callouts.map((c) => ({ title: [{ text: c.title, font: f.semi, size: BODY, color: C.ink }] as Run[], line: [{ text: c.line, font: f.sans, size: BODY, color: C.dim }] as Run[] }));
+  const sideH = sideRuns.length ? 22 + sideRuns.reduce((sum, c) => sum + textHeight(c.title, sideW, 1.42) + textHeight(c.line, sideW, 1.42) + 8, 0) : 0;
+  const blockH = Math.max(frameH + 7 + captionH, sideH);
+
+  // the picture and its caption are one piece: never split across pages
+  flow.ensure(Math.min(blockH, CONTENT_TOP - CONTENT_BOTTOM));
+  const page = flow.page;
+  const top = flow.y;
+  const r = 14;
+  const outline = `M ${r} 0 H ${frameW - r} A ${r} ${r} 0 0 1 ${frameW} ${r} V ${frameH - r} A ${r} ${r} 0 0 1 ${frameW - r} ${frameH} H ${r} A ${r} ${r} 0 0 1 0 ${frameH - r} V ${r} A ${r} ${r} 0 0 1 ${r} 0 Z`;
+  page.drawSvgPath(outline, { x: ML, y: top, borderColor: C.ink, borderWidth: 1, color: C.paper });
+  page.drawImage(image, { x: ML + SHOT_PAD, y: top - SHOT_PAD - h, width: w, height: h });
+  let baseline = top - frameH - 7;
+  for (const line of caption) {
+    baseline -= line.size;
+    drawLine(page, line, ML, baseline, 'center', frameW);
+    baseline -= line.size * 0.35;
+  }
+
+  // the call-outs sit beside the picture
+  if (sideRuns.length) {
+    flow.text([{ text: 'YOUR SITE ON A PHONE', font: f.monoMed, size: MIN, color: C.goldInk }], { x: sideX, width: sideW, after: 10 });
+    for (const c of sideRuns) {
+      flow.text(c.title, { x: sideX, width: sideW, leading: 1.42 });
+      flow.text(c.line, { x: sideX, width: sideW, leading: 1.42, after: 8 });
+    }
+  }
+  // below the taller of the two
+  flow.y = Math.min(flow.y, top - blockH);
+}
+
 // ---------- page 3: the five areas ----------
 function statusColor(status: ScoreStatus): RGB {
   if (status === 'Critical') return C.tally;
@@ -514,14 +585,22 @@ function barColor(status: ScoreStatus): RGB {
   return C.ink;
 }
 
-function drawAreas(flow: Flow, f: Fonts, r: AuditResults) {
+function drawAreas(flow: Flow, f: Fonts, r: AuditResults, shot: PDFImage | null) {
   flow.section('The five areas');
   flow.text([{ text: 'FIVE QUESTIONS A CUSTOMER ASKS WITHOUT SAYING THEM.', font: f.black, size: 30, color: C.ink }], { leading: 0.98, after: 16 });
 
   const left = 84;
   const midX = ML + left;
   const barW = 112;
+  let shotDrawn = false;
   for (const area of r.areas) {
+    // the phone picture, with its call-outs beside it, sits right above the First impression area
+    if (shot && !shotDrawn && area.key === 'first_impression') {
+      flow.gap(10);
+      drawPhoneShot(flow, f, shot, r.phoneCallouts);
+      flow.gap(18);
+      shotDrawn = true;
+    }
     const assessed = area.assessed;
     const name: Run[] = [{ text: area.name.toUpperCase(), font: f.xbold, size: 20, color: C.ink }];
     flow.ensure(80);
@@ -584,8 +663,12 @@ function drawAreas(flow: Flow, f: Fonts, r: AuditResults) {
   }
   flow.rule();
 
-  // only when a phone screenshot was supplied (nothing supplies one yet)
-  if (r.phoneCallouts.length > 0) {
+  // only when a phone screenshot was supplied; with its picture they sit beside it (above), alone only when the
+  // picture could not be drawn
+  if (shot && !shotDrawn) {
+    flow.gap(10);
+    drawPhoneShot(flow, f, shot, r.phoneCallouts);
+  } else if (!shot && r.phoneCallouts.length > 0) {
     flow.gap(24);
     flow.eyebrow('Your site on a phone');
     for (const c of r.phoneCallouts) {
@@ -644,7 +727,7 @@ function drawHowMade(flow: Flow, f: Fonts, r: AuditResults) {
 }
 
 // ---------- the document ----------
-export async function generateAuditPdf(rawResults: AuditResults, options?: { userName?: string }): Promise<Uint8Array> {
+export async function generateAuditPdf(rawResults: AuditResults, options?: { userName?: string; screenshot?: PhoneShot }): Promise<Uint8Array> {
   const r = cleanDeep(rawResults);
   // capped like the emails, then cleaned
   const userName = printable(options?.userName?.slice(0, 100) ?? '').trim();
@@ -671,7 +754,7 @@ export async function generateAuditPdf(rawResults: AuditResults, options?: { use
   drawCover(doc, fonts, r, userName);
   const flow = new Flow(doc, fonts, host);
   drawShortVersion(flow, fonts, r);
-  drawAreas(flow, fonts, r);
+  drawAreas(flow, fonts, r, await embedShot(doc, options?.screenshot));
   drawHowMade(flow, fonts, r);
 
   const total = doc.getPageCount();
