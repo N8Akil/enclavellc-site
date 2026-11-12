@@ -16,7 +16,7 @@ import { TOOL_NAME, runAudit } from '@/lib/audit/run-audit'
 import type { AssessedArea, AuditResults, Measurements } from '@/lib/audit/types'
 
 // THE FIXTURE. tests/fixtures/psi-enclavellc-mobile.json is trimmed from a real PageSpeed Insights v5 response
-// (mobile, enclavellc.net, recorded 2026-11-11 by the founder): only the fields our code reads are kept, and the
+// (mobile, enclavellc.net, recorded 2026-11-12 by the founder): only the fields our code reads are kept, and the
 // phone screenshot's data is replaced by a tiny valid 8x8 JPEG made for the fixture. No key is in it.
 const FIXTURE_TEXT = readFileSync(new URL('./fixtures/psi-enclavellc-mobile.json', import.meta.url), 'utf8')
 const FIXTURE = JSON.parse(FIXTURE_TEXT)
