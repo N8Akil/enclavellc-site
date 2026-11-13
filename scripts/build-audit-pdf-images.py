@@ -29,7 +29,7 @@ def mark(height: int, colour, name: str) -> None:
     out.save(os.path.join(OUT, name), optimize=True)
 
 
-def office(source_dir: str, who: str, centre_x: float, size=(620, 550)) -> None:
+def office(source_dir: str, who: str, centre_x: float, size=(560, 748)) -> None:
     im = Image.open(os.path.join(source_dir, f'cover-{who}-office.jpg')).convert('RGB')
     # the crop keeps the full height and the drawn box's aspect, centred on the person (centre_x: share of the width)
     crop_w = round(im.height * size[0] / size[1])
@@ -42,7 +42,7 @@ if __name__ == '__main__':
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     os.makedirs(OUT, exist_ok=True)
-    mark(360, GOLD, 'mark-gold.png')
+    mark(96, GOLD, 'mark-gold.png')
     mark(96, INK, 'mark-ink.png')
     office(sys.argv[1], 'isis', 0.52)
     office(sys.argv[1], 'osiris', 0.57)

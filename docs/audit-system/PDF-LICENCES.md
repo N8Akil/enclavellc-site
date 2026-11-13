@@ -28,5 +28,15 @@ weight. These instances are derivatives under the OFL and keep its licence. Neit
 IBM Plex Mono is used exactly as published, because "Plex" is a Reserved Font Name and a modified version could not
 keep that name.
 
+## Pictures (`src/lib/audit/images/`)
+
+Enclave's own images, made by `scripts/build-audit-pdf-images.py`, each at the size it is drawn at. Nothing is fetched
+while a report is made, and nothing is taken from the audited site.
+
+| File | What | Source |
+|---|---|---|
+| `mark-gold.png`, `mark-ink.png` | the Enclave mark, gold for the dark pages, ink for the paper pages | the shape (alpha) of `public/night/logo-mark.png`, the file the site's nav uses |
+| `isis-office.jpg`, `osiris-office.jpg` | the two AI partners in the office, on the closing studio page, each captioned "AI partner" | the studio's social-page covers `cover-isis-office.jpg`, `cover-osiris-office.jpg`, cropped around the person |
+
 The website itself loads the same families separately (`src/app/night/`: a self-hosted Big Shoulders woff2 and
 Google-hosted Instrument Sans and IBM Plex Mono through `next/font`). The PDF does not use those files.

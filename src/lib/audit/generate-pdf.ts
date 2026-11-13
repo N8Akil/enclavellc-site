@@ -2,7 +2,8 @@
 // The audit report as a designed PDF, made in plain JavaScript (pdf-lib + fontkit; no browser, no binary, no service).
 // The look follows the approved sample: a dark cover in the Night Crew colours, then paper pages printed in near-black
 // ink with gold as the accent (the gold used as text is the darker "gold ink", 4.9:1 on the paper).
-// Pages: 1 cover · 2 what works and the fixes · 3 the five areas · 4 how this was made, then the consultation block.
+// Pages: 1 cover · 2 what works and the fixes · 3 the five areas · 4 how this was made, then the consultation block ·
+// last, a dark page for the studio with its two office portraits (no finding sits beside a picture).
 // A section that does not fit carries on onto another page; text is never shrunk below 9.5 pt and nothing is cut.
 // Every word printed comes from the results, from present.ts or config.ts, or is a fixed label written here. The only
 // numbers printed are the results' own (scores, the date, counts in their text) and the page and fix numbering.
@@ -79,6 +80,8 @@ function fontFile(key: FontKey): Uint8Array {
 export const PICTURE_FILES = {
   markGold: 'mark-gold.png',
   markInk: 'mark-ink.png',
+  isis: 'isis-office.jpg',
+  osiris: 'osiris-office.jpg',
 } as const;
 type PictureKey = keyof typeof PICTURE_FILES;
 type Pictures = Partial<Record<PictureKey, PDFImage>>;
@@ -847,6 +850,71 @@ function drawHowMade(flow: Flow, f: Fonts, r: AuditResults) {
   flow.text([{ text: 'Thank you for choosing Enclave Development', font: f.italic, size: BODY, color: C.dim }], { align: 'center', leading: 1.4 });
 }
 
+// ---------- the last page: the studio ----------
+// A dark page after the report, set apart from every finding, so no picture can read as evidence for one. Its words
+// are the site's own (the home page's line and the crew's roles); each portrait is named as an AI partner right under it.
+export const STUDIO_HEADING = 'One founder, six AI partners, one studio.';
+export const STUDIO_LINE = 'Your website, your follow-up and your content keep working after you close.';
+export const STUDIO_PARTNERS: Array<{ key: 'isis' | 'osiris'; name: string; role: string }> = [
+  { key: 'isis', name: 'Isis', role: 'Design and build' },
+  { key: 'osiris', name: 'Osiris', role: 'Quality review' },
+];
+export const AI_PARTNER_LABEL = 'AI partner';
+
+function drawStudio(doc: PDFDocument, f: Fonts, pics: Pictures) {
+  const partners = STUDIO_PARTNERS.filter((p) => pics[p.key]);
+  // the page is there for its pictures: with none of them, there is no page
+  if (partners.length === 0) return;
+  const page = doc.addPage([W, H]);
+  page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: C.night });
+
+  const headA = 'WEBSITE AUDIT';
+  const headB = ' · FREE EDITION';
+  page.drawText(headA, { x: ML, y: H - 52, font: f.monoMed, size: MIN, color: C.onNight });
+  page.drawText(headB, { x: ML + width(headA, { font: f.monoMed, size: MIN, color: C.onNight }), y: H - 52, font: f.mono, size: MIN, color: C.onNightDim });
+  page.drawLine({ start: { x: ML, y: H - 62 }, end: { x: W - MR, y: H - 62 }, thickness: 0.75, color: C.nightLine });
+  drawStripe(page);
+
+  // the heading a phrase to a line
+  let y = H - 112;
+  const headSize = 44;
+  for (const phrase of STUDIO_HEADING.toUpperCase().split(/(?<=,) /)) {
+    for (const line of wrap([{ text: phrase, font: f.black, size: headSize, color: C.onNight }], CW)) {
+      y -= headSize * 0.92;
+      drawLine(page, line, ML, y);
+    }
+  }
+  y -= 12;
+  const lineSize = 14;
+  const lh = lineSize * 1.4;
+  for (const line of wrap([{ text: STUDIO_LINE, font: f.sans, size: lineSize, color: C.onNightDim }], CW)) {
+    drawLine(page, line, ML, baselineOf(y, lh, lineSize));
+    y -= lh;
+  }
+
+  // the portraits, side by side, each named under it
+  const gap = 18;
+  const colW = (CW - gap) / 2;
+  const top = y - 24;
+  partners.forEach((p, i) => {
+    const image = pics[p.key]!;
+    const x = ML + i * (colW + gap);
+    const h = (colW * image.height) / image.width;
+    if (!drawPicture(page, image, { x, y: top - h, width: colW, height: h })) return;
+    let cy = top - h - 26;
+    page.drawText(p.name.toUpperCase(), { x, y: cy, font: f.xbold, size: 22, color: C.onNight });
+    cy -= 17;
+    const label = AI_PARTNER_LABEL.toUpperCase();
+    page.drawText(label, { x, y: cy, font: f.monoMed, size: MIN, color: C.gold });
+    page.drawText(` · ${p.role.toUpperCase()}`, { x: x + width(label, { font: f.monoMed, size: MIN, color: C.gold }), y: cy, font: f.mono, size: MIN, color: C.onNightDim });
+  });
+
+  page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.nightLine });
+  drawMark(page, f, ML, 36, pics.markGold, C.onNight);
+  const site = 'enclavellc.net';
+  page.drawText(site, { x: W - MR - width(site, { font: f.mono, size: MIN, color: C.onNightDim }), y: 36, font: f.mono, size: MIN, color: C.onNightDim });
+}
+
 // ---------- the document ----------
 export async function generateAuditPdf(rawResults: AuditResults, options?: { userName?: string; screenshot?: PhoneShot }): Promise<Uint8Array> {
   const r = cleanDeep(rawResults);
@@ -878,6 +946,7 @@ export async function generateAuditPdf(rawResults: AuditResults, options?: { use
   drawShortVersion(flow, fonts, r);
   drawAreas(flow, fonts, r, await embedShot(doc, options?.screenshot));
   drawHowMade(flow, fonts, r);
+  drawStudio(doc, fonts, pics);
 
   const total = doc.getPageCount();
   flow.pages.forEach((page, i) => drawFooter(page, fonts, pics, i + 2, total));

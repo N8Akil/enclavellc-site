@@ -425,7 +425,8 @@ describe('generateAuditPdf', () => {
     const short = await PDFDocument.load(await generateAuditPdf(reportFixture))
     const long = await PDFDocument.load(await generateAuditPdf(homeCareLong))
     expect(long.getPageCount()).toBeGreaterThan(short.getPageCount())
-    expect(long.getPageCount()).toBeLessThanOrEqual(8)
+    // eight, and the closing studio page
+    expect(long.getPageCount()).toBeLessThanOrEqual(9)
     const pages = await extract(await generateAuditPdf(homeCareLong))
     expect(bodyOf(pages)).toContain(squash(`“${LONG_QUOTE}”`))
   })
@@ -686,7 +687,8 @@ describe('generateAuditPdf', () => {
       const bytes = await generateAuditPdf(reportFixture, { screenshot: PNG_SHOT })
       const { pageCount, drawn } = await drawnPictures(bytes)
       for (let p = 1; p <= pageCount; p++) {
-        const dark = p === 1
+        // the cover and the closing studio page are dark
+        const dark = p === 1 || p === pageCount
         const marks = drawn.filter((d) => d.page === p && d.y < 52)
         expect(marks, `one picture in the footer of page ${p}`).toHaveLength(1)
         const mark = marks[0]
@@ -749,6 +751,87 @@ describe('generateAuditPdf', () => {
         cwd.mockRestore()
         vi.resetModules()
         fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+  })
+
+  describe('the studio page', () => {
+    const PARTNERS = [
+      { name: 'ISIS', role: 'DESIGN AND BUILD' },
+      { name: 'OSIRIS', role: 'QUALITY REVIEW' },
+    ]
+    // a page's text items with their positions
+    async function itemsOf(bytes: Uint8Array, pageNumber: number) {
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const doc = await pdfjs.getDocument({ data: bytes.slice(), disableFontFace: true, useSystemFonts: false }).promise
+      const items = (await (await doc.getPage(pageNumber)).getTextContent()).items.filter((i) => 'str' in i && i.str.trim() !== '') as Array<{ str: string; transform: number[] }>
+      return items.map((i) => ({ str: i.str, x: i.transform[4], y: i.transform[5] }))
+    }
+
+    it('comes last, after the consultation block, with the two portraits, each named as an AI partner right under it, and nothing from the results', async () => {
+      const bytes = await generateAuditPdf(allAssessed, { userName: 'Dana Ortiz', screenshot: PNG_SHOT })
+      const pages = await extract(bytes)
+      const last = pages.length
+      expect(squash(pages[last - 2].text)).toContain(squash('Thank you for choosing Enclave Development'))
+      const studio = squash(pages[last - 1].text)
+      expect(studio).toContain(squash('ONE FOUNDER, SIX AI PARTNERS, ONE STUDIO.'))
+      expect(studio).toContain(squash('Your website, your follow-up and your content keep working after you close.'))
+      // the page holds only its own fixed words: no finding, fix, score or name of the site audited
+      for (const text of [...everyEvidence(allAssessed).map((e) => e.claim), ...allAssessed.fixes.map((f) => f.headline), 'riverside', '/10', 'Dana'])
+        expect(studio.toLowerCase()).not.toContain(squash(text).toLowerCase())
+      expect(/\d/.test(pages[last - 1].text)).toBe(false)
+
+      const { drawn } = await drawnPictures(bytes)
+      const portraits = drawn.filter((d) => d.page === last && d.y > 52)
+      expect(portraits).toHaveLength(2)
+      const items = await itemsOf(bytes, last)
+      portraits.sort((a, b) => a.x - b.x).forEach((photo, i) => {
+        // right under the picture, inside its width: the name, then "AI PARTNER · role"
+        const under = items.filter((t) => t.x >= photo.x - 1 && t.x < photo.x + photo.w && t.y < photo.y && t.y > photo.y - 50)
+        const said = squash(under.map((t) => t.str).join(' '))
+        expect(said, `caption of portrait ${i + 1}`).toBe(squash(`${PARTNERS[i].name} AI PARTNER · ${PARTNERS[i].role}`))
+      })
+    })
+
+    it('the paper pages draw no picture but the footer mark and the screenshot: findings stay evidence only', async () => {
+      const bytes = await generateAuditPdf(allAssessed, { screenshot: PNG_SHOT })
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      const paper = drawn.filter((d) => d.page > 1 && d.page < pageCount && d.y > 52)
+      expect(paper).toHaveLength(1)
+      expect(BUNDLED_SIZES.has(sizeOf(paper[0].image)), 'the one picture above a footer is the screenshot').toBe(false)
+    })
+
+    it('portraits that cannot be embedded leave no studio page, and the report is whole', async () => {
+      const jpg = vi.spyOn(PDFDocument.prototype, 'embedJpg').mockRejectedValue(new Error('no jpg'))
+      try {
+        const bytes = await generateAuditPdf(reportFixture)
+        const pages = await extract(bytes)
+        expect(bodyOf(pages)).not.toContain(squash('ONE STUDIO'))
+        expect(squash(pages.at(-1)!.text)).toContain(squash('Thank you for choosing Enclave Development'))
+        // the marks are still there, one per page
+        expect((await drawnPictures(bytes)).drawn).toHaveLength(pages.length)
+      } finally {
+        jpg.mockRestore()
+      }
+    })
+
+    it('a portrait that fails to draw goes with its caption; the other stays', async () => {
+      const real = PDFPage.prototype.drawImage
+      const draw = vi.spyOn(PDFPage.prototype, 'drawImage').mockImplementation(function (this: PDFPage, image, options) {
+        // the first portrait (the widest picture drawn on a dark page) fails
+        if (options && (options.width ?? 0) > 200 && options.x === 50) throw new Error('no draw')
+        return real.call(this, image, options)
+      })
+      try {
+        const bytes = await generateAuditPdf(reportFixture)
+        const pages = await extract(bytes)
+        const studio = squash(pages.at(-1)!.text)
+        expect(studio).toContain(squash('ONE STUDIO'))
+        expect(studio).not.toContain('ISIS')
+        expect(studio).toContain(squash('OSIRIS AI PARTNER · QUALITY REVIEW'))
+        expect(bodyOf(pages)).toContain(squash(reportFixture.fixes[0].headline))
+      } finally {
+        draw.mockRestore()
       }
     })
   })
