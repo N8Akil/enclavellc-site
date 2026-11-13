@@ -28,6 +28,9 @@ weight. These instances are derivatives under the OFL and keep its licence. Neit
 IBM Plex Mono is used exactly as published, because "Plex" is a Reserved Font Name and a modified version could not
 keep that name.
 
+The website itself loads the same families separately (`src/app/night/`: a self-hosted Big Shoulders woff2 and
+Google-hosted Instrument Sans and IBM Plex Mono through `next/font`). The PDF does not use those files.
+
 ## Pictures (`src/lib/audit/images/`)
 
 Enclave's own images, made by `scripts/build-audit-pdf-images.py`, each at the size it is drawn at. Nothing is fetched
@@ -38,5 +41,8 @@ while a report is made, and nothing is taken from the audited site.
 | `mark-gold.png`, `mark-ink.png`, `mark-cover.png` | the Enclave mark: gold for the dark pages' footers, ink for the paper pages, and the cover's large one in its top band | the shape (alpha) of `public/logo-icon.png`, the site's logo at 1024 px (the same shape as `public/night/logo-mark.png`, which the Night Crew nav uses) |
 | `isis-office.jpg`, `osiris-office.jpg` | the two AI partners in the office, on the closing studio page, each captioned "AI partner" | the studio's social-page covers `cover-isis-office.jpg`, `cover-osiris-office.jpg`, cropped around the person |
 
-The website itself loads the same families separately (`src/app/night/`: a self-hosted Big Shoulders woff2 and
-Google-hosted Instrument Sans and IBM Plex Mono through `next/font`). The PDF does not use those files.
+The two portraits are AI-generated images of Enclave's AI partners Isis and Osiris, not photographs of people. They
+were made in Google Flow (Nano Banana image model) in November 2026 from the partners' existing reference portraits.
+The source files are kept outside this repository, at
+`~/.openclaw/agents/isis/work/social-pages-20261111/` (`cover-isis-office.jpg`, `cover-osiris-office.jpg`); pass that
+folder to the script to rebuild them. The report names each one as an AI partner right under the picture.
