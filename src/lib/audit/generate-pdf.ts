@@ -98,6 +98,16 @@ function pictureFile(key: PictureKey): Uint8Array {
   return bytes;
 }
 
+// A picture left out is said once per process, by its file name only: never a path, never the error (whose text could
+// carry anything), never anything from the site audited.
+const warnedPictures = new Set<string>();
+function warnPictureLeftOut(key: PictureKey) {
+  const file = PICTURE_FILES[key];
+  if (warnedPictures.has(file)) return;
+  warnedPictures.add(file);
+  console.warn(`[audit-pdf] picture left out: ${file}`);
+}
+
 // A picture that cannot be read or embedded is left out, alone: the report is made without it.
 async function embedPictures(doc: PDFDocument): Promise<Pictures> {
   const out: Pictures = {};
@@ -106,20 +116,24 @@ async function embedPictures(doc: PDFDocument): Promise<Pictures> {
       const bytes = pictureFile(key);
       const image = PICTURE_FILES[key].endsWith('.png') ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
       if (image.width > 0 && image.height > 0) out[key] = image;
+      else warnPictureLeftOut(key);
     } catch {
-      // no picture
+      warnPictureLeftOut(key);
     }
   }
   return out;
 }
 
-// Draws a picture; one that fails to draw is left out, and the page carries on without it.
-function drawPicture(page: PDFPage, image: PDFImage | undefined, box: { x: number; y: number; width: number; height: number }): boolean {
+// Draws a picture; one that fails to draw is left out, and the page carries on without it. (One that was never
+// embedded was already said at embedding.)
+function drawPicture(page: PDFPage, pics: Pictures, key: PictureKey, box: { x: number; y: number; width: number; height: number }): boolean {
+  const image = pics[key];
   if (!image) return false;
   try {
     page.drawImage(image, box);
     return true;
   } catch {
+    warnPictureLeftOut(key);
     return false;
   }
 }
@@ -371,15 +385,16 @@ class Flow {
 
 // The Enclave mark and the word, on one baseline. Without its picture the word stands alone.
 const MARK_H = 13;
-function drawMark(page: PDFPage, f: Fonts, x: number, baseline: number, mark: PDFImage | undefined, word: RGB) {
+function drawMark(page: PDFPage, f: Fonts, x: number, baseline: number, pics: Pictures, key: 'markGold' | 'markInk', word: RGB) {
+  const mark = pics[key];
   const w = mark ? (MARK_H * mark.width) / mark.height : 0;
-  const drawn = drawPicture(page, mark, { x, y: baseline - 2.5, width: w, height: MARK_H });
+  const drawn = drawPicture(page, pics, key, { x, y: baseline - 2.5, width: w, height: MARK_H });
   page.drawText('ENCLAVE', { x: drawn ? x + w + 6 : x, y: baseline, font: f.monoMed, size: MIN, color: word });
 }
 
 function drawFooter(page: PDFPage, f: Fonts, pics: Pictures, index: number, total: number) {
   page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.line });
-  drawMark(page, f, ML, 36, pics.markInk, C.ink);
+  drawMark(page, f, ML, 36, pics, 'markInk', C.ink);
   const label = `${index} / ${total}`;
   const lw = width(label, { font: f.mono, size: MIN, color: C.dim });
   page.drawText(label, { x: W - MR - lw, y: 36, font: f.mono, size: MIN, color: C.dim });
@@ -407,7 +422,7 @@ function drawCover(doc: PDFDocument, f: Fonts, pics: Pictures, r: AuditResults, 
   const markH = 26;
   const mark = pics.markCover;
   const mw = mark ? (markH * mark.width) / mark.height : 0;
-  const drawn = drawPicture(page, mark, { x: ML, y: H - 62, width: mw, height: markH });
+  const drawn = drawPicture(page, pics, 'markCover', { x: ML, y: H - 62, width: mw, height: markH });
   page.drawText('ENCLAVE', { x: drawn ? ML + mw + 10 : ML, y: H - 61, font: f.xbold, size: 24, color: C.onNight });
   const aw = width(headA, { font: f.monoMed, size: MIN, color: C.onNight });
   const bw = width(headB, { font: f.mono, size: MIN, color: C.onNightDim });
@@ -475,7 +490,7 @@ function drawCover(doc: PDFDocument, f: Fonts, pics: Pictures, r: AuditResults, 
   }
 
   page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.nightLine });
-  drawMark(page, f, ML, 36, pics.markGold, C.onNight);
+  drawMark(page, f, ML, 36, pics, 'markGold', C.onNight);
   const site = 'enclavellc.net';
   page.drawText(site, { x: W - MR - width(site, { font: f.mono, size: MIN, color: C.onNightDim }), y: 36, font: f.mono, size: MIN, color: C.onNightDim });
 }
@@ -872,9 +887,10 @@ export const AI_PARTNER_LABEL = 'AI partner';
 
 function drawStudio(doc: PDFDocument, f: Fonts, pics: Pictures) {
   const partners = STUDIO_PARTNERS.filter((p) => pics[p.key]);
-  // the page is there for its pictures: with none of them, there is no page
+  // the page is there for its pictures: with none of them embedded, or none of them drawn (below), there is no page
   if (partners.length === 0) return;
   const page = doc.addPage([W, H]);
+  const pageIndex = doc.getPageCount() - 1;
   page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: C.night });
 
   const headA = 'WEBSITE AUDIT';
@@ -905,11 +921,13 @@ function drawStudio(doc: PDFDocument, f: Fonts, pics: Pictures) {
   const gap = 18;
   const colW = (CW - gap) / 2;
   const top = y - 24;
+  let portraits = 0;
   partners.forEach((p, i) => {
     const image = pics[p.key]!;
     const x = ML + i * (colW + gap);
     const h = (colW * image.height) / image.width;
-    if (!drawPicture(page, image, { x, y: top - h, width: colW, height: h })) return;
+    if (!drawPicture(page, pics, p.key, { x, y: top - h, width: colW, height: h })) return;
+    portraits += 1;
     let cy = top - h - 26;
     page.drawText(p.name.toUpperCase(), { x, y: cy, font: f.xbold, size: 22, color: C.onNight });
     cy -= 17;
@@ -917,9 +935,13 @@ function drawStudio(doc: PDFDocument, f: Fonts, pics: Pictures) {
     page.drawText(label, { x, y: cy, font: f.monoMed, size: MIN, color: C.gold });
     page.drawText(` · ${p.role.toUpperCase()}`, { x: x + width(label, { font: f.monoMed, size: MIN, color: C.gold }), y: cy, font: f.mono, size: MIN, color: C.onNightDim });
   });
+  if (portraits === 0) {
+    doc.removePage(pageIndex);
+    return;
+  }
 
   page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.nightLine });
-  drawMark(page, f, ML, 36, pics.markGold, C.onNight);
+  drawMark(page, f, ML, 36, pics, 'markGold', C.onNight);
   const site = 'enclavellc.net';
   page.drawText(site, { x: W - MR - width(site, { font: f.mono, size: MIN, color: C.onNightDim }), y: 36, font: f.mono, size: MIN, color: C.onNightDim });
 }

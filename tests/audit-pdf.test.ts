@@ -171,6 +171,8 @@ const BUNDLED_SIZES = new Set(
 const BUNDLED_BYTES = Object.values(PICTURE_FILES ?? {}).map((file) => fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', file)))
 // the calls of an embedJpg/embedPng spy that were handed anything other than a bundled picture
 const nonBundledCalls = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.filter(([input]) => !BUNDLED_BYTES.some((b) => input instanceof Uint8Array && Buffer.from(input).equals(b)))
+// whether an image object holds this bundled file byte for byte (pdf-lib keeps a JPEG as it is)
+const isFile = (image: PDFRawStream, file: string) => Buffer.from(image.getContents()).equals(fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', file)))
 const isImage = (obj: unknown): obj is PDFRawStream => obj instanceof PDFRawStream && obj.dict.get(PDFName.of('Subtype'))?.toString() === '/Image'
 const sizeOf = (image: PDFRawStream) => `${(image.dict.get(PDFName.of('Width')) as PDFNumber).asNumber()}x${(image.dict.get(PDFName.of('Height')) as PDFNumber).asNumber()}`
 const isScreenshot = (obj: unknown) => isImage(obj) && !BUNDLED_SIZES.has(sizeOf(obj))
@@ -769,19 +771,30 @@ describe('generateAuditPdf', () => {
       }
     })
 
-    it('a picture file missing from disk drops that picture only, and the report is made', async () => {
+    it('a picture file missing from disk drops that picture only, says so once per file by name only, and the report is made', async () => {
       // a copy of the repository's audit folder with the fonts and without the pictures
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-pdf-'))
       fs.cpSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'fonts'), path.join(root, 'src', 'lib', 'audit', 'fonts'), { recursive: true })
       const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       vi.resetModules()
       try {
         const fresh = await import('@/lib/audit/generate-pdf')
+        // two reports in one process: the second says nothing new
+        await fresh.generateAuditPdf(reportFixture)
         const bytes = await fresh.generateAuditPdf(reportFixture)
         expect((await drawnPictures(bytes)).drawn).toHaveLength(0)
         const all = bodyOf(await extract(bytes))
         for (const fix of reportFixture.fixes) expect(all).toContain(squash(fix.headline))
+        // one line per picture file, its name only: no path, no error text
+        const said = warn.mock.calls.map((args) => args.join(' '))
+        expect(said.sort()).toEqual(Object.values(PICTURE_FILES).map((file) => `[audit-pdf] picture left out: ${file}`).sort())
+        for (const line of said) {
+          expect(line).not.toContain(root)
+          expect(line).not.toContain('ENOENT')
+        }
       } finally {
+        warn.mockRestore()
         cwd.mockRestore()
         vi.resetModules()
         fs.rmSync(root, { recursive: true, force: true })
@@ -827,6 +840,33 @@ describe('generateAuditPdf', () => {
       })
     })
 
+    it('each caption sits under its own portrait: the picture drawn above a name is the file of that partner', async () => {
+      const bytes = await generateAuditPdf(reportFixture)
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      const items = await itemsOf(bytes, pageCount)
+      const portraits = drawn.filter((d) => d.page === pageCount && d.y > 52)
+      expect(portraits).toHaveLength(2)
+      for (const photo of portraits) {
+        const name = items.find((t) => t.x >= photo.x - 1 && t.x < photo.x + photo.w && t.y < photo.y && t.y > photo.y - 30)?.str.trim()
+        expect(['ISIS', 'OSIRIS']).toContain(name)
+        // a JPEG is held in the PDF byte for byte: the drawn picture is the named partner's own file
+        const file = PICTURE_FILES[name!.toLowerCase() as 'isis' | 'osiris']
+        expect(isFile(photo.image, file), `the picture above ${name} is ${file}`).toBe(true)
+      }
+    })
+
+    it('no portrait is drawn anywhere but the studio page: never on the cover beside the score, never on a paper page', async () => {
+      const bytes = await generateAuditPdf(allAssessed, { userName: 'Dana Ortiz', screenshot: PNG_SHOT })
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      const portraitFiles = [PICTURE_FILES.isis, PICTURE_FILES.osiris]
+      const elsewhere = drawn.filter((d) => d.page < pageCount && portraitFiles.some((file) => isFile(d.image, file)))
+      expect(elsewhere, 'portraits before the studio page').toHaveLength(0)
+      // and on the cover nothing is drawn but its two marks, neither larger than the band
+      const cover = drawn.filter((d) => d.page === 1)
+      expect(cover).toHaveLength(2)
+      for (const d of cover) expect(d.h).toBeLessThanOrEqual(30)
+    })
+
     it('the paper pages draw no picture but the footer mark and the screenshot: findings stay evidence only', async () => {
       const bytes = await generateAuditPdf(allAssessed, { screenshot: PNG_SHOT })
       const { pageCount, drawn } = await drawnPictures(bytes)
@@ -846,6 +886,28 @@ describe('generateAuditPdf', () => {
         expect((await drawnPictures(bytes)).drawn).toHaveLength(pages.length + 1)
       } finally {
         jpg.mockRestore()
+      }
+    })
+
+    it('portraits that both fail to draw leave no studio page (not an empty one), and the report is whole', async () => {
+      const real = PDFPage.prototype.drawImage
+      const draw = vi.spyOn(PDFPage.prototype, 'drawImage').mockImplementation(function (this: PDFPage, image, options) {
+        // every portrait (the only pictures drawn wider than 200 points) fails
+        if (options && (options.width ?? 0) > 200) throw new Error('no draw')
+        return real.call(this, image, options)
+      })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const bytes = await generateAuditPdf(reportFixture)
+        const pages = await extract(bytes)
+        expect(bodyOf(pages)).not.toContain(squash('ONE STUDIO'))
+        expect(squash(pages.at(-1)!.text)).toContain(squash('Thank you for choosing Enclave Development'))
+        // the page numbers count the pages there are
+        expect(pages.at(-1)!.lines.at(-1)!.replace(/^ENCLAVE\s*/, '')).toBe(`${pages.length} / ${pages.length}`)
+        expect((await PDFDocument.load(bytes)).getPageCount()).toBe(pages.length)
+      } finally {
+        warn.mockRestore()
+        draw.mockRestore()
       }
     })
 
