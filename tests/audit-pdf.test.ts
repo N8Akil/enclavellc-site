@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { deflateSync } from 'node:zlib'
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib'
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFPage, PDFRawStream, decodePDFRawStream } from 'pdf-lib'
 import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
-import { barFill, generateAuditPdf } from '@/lib/audit/generate-pdf'
+import { PICTURE_FILES, barFill, generateAuditPdf, readImageSize } from '@/lib/audit/generate-pdf'
 import { howMadeText } from '@/lib/audit/present'
 import type { AuditResults, Evidence } from '@/lib/audit/types'
 import { REPORT_SITE, reportFixture } from './helpers'
@@ -156,19 +159,92 @@ function jpegWithWidth(width: number): string {
 }
 const WEBP_SHOT = { mediaType: 'image/webp', dataBase64: Buffer.from('RIFF\0\0\0\0WEBPVP8 ').toString('base64') }
 
-// how many picture objects the PDF holds, and the page numbers (from 1) whose resources use one
+// The pictures bundled with the report (the mark, the studio page) by their pixel size; none is the size of a test
+// screenshot, so an image object of any other size is the screenshot.
+const BUNDLED_SIZES = new Set(
+  Object.values(PICTURE_FILES ?? {}).map((file) => {
+    const bytes = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', file))
+    const size = readImageSize(bytes, file.endsWith('.png') ? 'image/png' : 'image/jpeg')
+    return `${size?.width}x${size?.height}`
+  })
+)
+const BUNDLED_BYTES = Object.values(PICTURE_FILES ?? {}).map((file) => fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', file)))
+// the calls of an embedJpg/embedPng spy that were handed anything other than a bundled picture
+const nonBundledCalls = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.filter(([input]) => !BUNDLED_BYTES.some((b) => input instanceof Uint8Array && Buffer.from(input).equals(b)))
+// whether an image object holds this bundled file byte for byte (pdf-lib keeps a JPEG as it is)
+const isFile = (image: PDFRawStream, file: string) => Buffer.from(image.getContents()).equals(fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', file)))
+const isImage = (obj: unknown): obj is PDFRawStream => obj instanceof PDFRawStream && obj.dict.get(PDFName.of('Subtype'))?.toString() === '/Image'
+const sizeOf = (image: PDFRawStream) => `${(image.dict.get(PDFName.of('Width')) as PDFNumber).asNumber()}x${(image.dict.get(PDFName.of('Height')) as PDFNumber).asNumber()}`
+const isScreenshot = (obj: unknown) => isImage(obj) && !BUNDLED_SIZES.has(sizeOf(obj))
+
+// how many screenshot pictures the PDF holds, and the page numbers (from 1) whose resources use one
 async function pictures(bytes: Uint8Array): Promise<{ count: number; pages: number[] }> {
   const doc = await PDFDocument.load(bytes)
   let count = 0
-  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
-    if (obj instanceof PDFRawStream && obj.dict.get(PDFName.of('Subtype'))?.toString() === '/Image') count++
-  }
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) if (isScreenshot(obj)) count++
   const pages: number[] = []
   doc.getPages().forEach((page, i) => {
     const xobjects = page.node.Resources()?.lookupMaybe(PDFName.of('XObject'), PDFDict)
-    if (xobjects && xobjects.keys().length > 0) pages.push(i + 1)
+    if (xobjects?.keys().some((k) => isScreenshot(xobjects.lookup(k)))) pages.push(i + 1)
   })
   return { count, pages }
+}
+
+// a page's drawing operators, all its content streams in order
+function contentOf(doc: PDFDocument, page: PDFPage): string {
+  const look = doc.context.lookup(page.node.get(PDFName.of('Contents')))
+  const streams = look instanceof PDFArray ? look.asArray().map((r) => doc.context.lookup(r)) : [look]
+  return streams.map((s) => Buffer.from(decodePDFRawStream(s as PDFRawStream).decode()).toString('latin1')).join('\n')
+}
+
+// Every picture actually drawn ("Do" in a page's content), with the box it is drawn in (points) and its image object.
+interface DrawnPicture {
+  page: number
+  x: number
+  y: number
+  w: number
+  h: number
+  image: PDFRawStream
+}
+async function drawnPictures(bytes: Uint8Array): Promise<{ pageCount: number; drawn: DrawnPicture[] }> {
+  const doc = await PDFDocument.load(bytes)
+  const drawn: DrawnPicture[] = []
+  doc.getPages().forEach((page, i) => {
+    const xobjects = page.node.Resources()?.lookupMaybe(PDFName.of('XObject'), PDFDict)
+    const lines = contentOf(doc, page).split('\n')
+    const open: number[] = []
+    lines.forEach((line, k) => {
+      if (line === 'q') open.push(k)
+      else if (line === 'Q') open.pop()
+      const named = line.match(/^\/(\S+) Do$/)
+      if (!named || !xobjects) return
+      const image = xobjects.lookup(PDFName.of(named[1]))
+      if (!isImage(image)) return
+      // the transformation set up inside this q ... Q block, composed in order
+      let m = [1, 0, 0, 1, 0, 0]
+      for (const l of lines.slice(open[open.length - 1] ?? 0, k)) {
+        const cm = l.match(/^(\S+) (\S+) (\S+) (\S+) (\S+) (\S+) cm$/)
+        if (!cm) continue
+        const [a, b, c, d, e, f] = cm.slice(1).map(Number)
+        m = [a * m[0] + b * m[2], a * m[1] + b * m[3], c * m[0] + d * m[2], c * m[1] + d * m[3], e * m[0] + f * m[2] + m[4], e * m[1] + f * m[3] + m[5]]
+      }
+      drawn.push({ page: i + 1, x: m[4], y: m[5], w: m[0], h: m[3], image })
+    })
+  })
+  return { pageCount: doc.getPageCount(), drawn }
+}
+
+// an image object's pixels (8 bits per component, Flate, no predictor: how pdf-lib stores a PNG) and its alpha
+function pixelsOf(image: PDFRawStream): { width: number; height: number; rgb: Uint8Array; alpha: Uint8Array | null } {
+  const width = (image.dict.get(PDFName.of('Width')) as PDFNumber).asNumber()
+  const height = (image.dict.get(PDFName.of('Height')) as PDFNumber).asNumber()
+  const smask = image.dict.lookup(PDFName.of('SMask'))
+  return {
+    width,
+    height,
+    rgb: decodePDFRawStream(image).decode(),
+    alpha: smask instanceof PDFRawStream ? decodePDFRawStream(smask).decode() : null,
+  }
 }
 
 const SITE = 'https://riverside-care.example.test'
@@ -351,7 +427,8 @@ describe('generateAuditPdf', () => {
     const short = await PDFDocument.load(await generateAuditPdf(reportFixture))
     const long = await PDFDocument.load(await generateAuditPdf(homeCareLong))
     expect(long.getPageCount()).toBeGreaterThan(short.getPageCount())
-    expect(long.getPageCount()).toBeLessThanOrEqual(8)
+    // eight, and the closing studio page
+    expect(long.getPageCount()).toBeLessThanOrEqual(9)
     const pages = await extract(await generateAuditPdf(homeCareLong))
     expect(bodyOf(pages)).toContain(squash(`“${LONG_QUOTE}”`))
   })
@@ -546,8 +623,9 @@ describe('generateAuditPdf', () => {
           expect((await pictures(bytes)).count).toBe(0)
           expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
         }
-        expect(png, 'embedPng not attempted').not.toHaveBeenCalled()
-        expect(jpg, 'embedJpg not attempted').not.toHaveBeenCalled()
+        // (the bundled pictures are embedded as always; the screenshot never is)
+        expect(nonBundledCalls(png), 'embedPng not attempted').toHaveLength(0)
+        expect(nonBundledCalls(jpg), 'embedJpg not attempted').toHaveLength(0)
       } finally {
         jpg.mockRestore()
         png.mockRestore()
@@ -563,8 +641,8 @@ describe('generateAuditPdf', () => {
           expect((await pictures(bytes)).count).toBe(0)
           expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
         }
-        expect(png).not.toHaveBeenCalled()
-        expect(jpg).not.toHaveBeenCalled()
+        expect(nonBundledCalls(png)).toHaveLength(0)
+        expect(nonBundledCalls(jpg)).toHaveLength(0)
       } finally {
         jpg.mockRestore()
         png.mockRestore()
@@ -594,6 +672,263 @@ describe('generateAuditPdf', () => {
     it('the caption has no digit, so no number is printed that is not in the results', async () => {
       expect(/\d/.test(SHOT_CAPTION)).toBe(false)
       expectNoInventedNumbers(await extract(await generateAuditPdf(withCallouts, { userName: 'Dana Ortiz', screenshot: PNG_SHOT })), withCallouts)
+    })
+  })
+
+  describe('the Enclave mark', () => {
+    // How many times a row of the picture, at this share of its height from the top, goes from clear to solid.
+    // The real mark is stripes: a row through its middle enters a solid part many times. A filled triangle, once.
+    function solidRuns(alpha: Uint8Array, width: number, height: number, at: number): number {
+      const row = Math.round(height * at) * width
+      let runs = 0
+      for (let x = 0; x < width; x++) if (alpha[row + x] >= 128 && (x === 0 || alpha[row + x - 1] < 128)) runs++
+      return runs
+    }
+
+    const GOLD = [0xe8, 0xb0, 0x4b]
+    const INK = [0x1a, 0x17, 0x14]
+    // The picture is the real mark: a transparent ground, crisp in print at the size drawn, the striped shape, the colour.
+    function expectRealMark(mark: DrawnPicture, colour: number[], where: string) {
+      const { width, height, rgb, alpha } = pixelsOf(mark.image)
+      expect(alpha, `${where}: the mark has a transparent ground, so the page shows through`).not.toBeNull()
+      // crisp in print: at least 600 pixels to the inch at the size it is drawn
+      expect(height / (mark.h / 72), `${where}: pixels to the inch`).toBeGreaterThanOrEqual(600)
+      // the shape is the striped mark
+      for (const at of [0.45, 0.6, 0.75]) expect(solidRuns(alpha!, width, height, at), `${where}: solid runs across row ${at}`).toBeGreaterThanOrEqual(4)
+      const solid = alpha!.reduce((n, a) => n + (a >= 128 ? 1 : 0), 0) / (width * height)
+      expect(solid, `${where}: a filled triangle covers half of its box; the mark is mostly gaps`).toBeLessThan(0.4)
+      expect(solid).toBeGreaterThan(0.1)
+      // its colour, where it is solid
+      const at = alpha!.findIndex((a) => a === 255)
+      expect([rgb[at * 3], rgb[at * 3 + 1], rgb[at * 3 + 2]], `${where}: colour of the mark`).toEqual(colour)
+    }
+
+    it('the cover carries the mark large in its top band, gold, beside the name, above the edition line', async () => {
+      const bytes = await generateAuditPdf(reportFixture, { userName: 'Dana Ortiz' })
+      const { drawn } = await drawnPictures(bytes)
+      const band = drawn.filter((d) => d.page === 1 && d.y > 792 - 90)
+      expect(band, 'one picture in the cover band').toHaveLength(1)
+      const mark = band[0]
+      // clearly sized: twice the footer's, at the left margin
+      expect(mark.h).toBeGreaterThanOrEqual(22)
+      expect(mark.x).toBeCloseTo(50, 0)
+      expectRealMark(mark, GOLD, 'cover band')
+      // the name sits right of it, on its row; the edition line and the date stay
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const doc = await pdfjs.getDocument({ data: bytes.slice(), disableFontFace: true, useSystemFonts: false }).promise
+      const items = (await (await doc.getPage(1)).getTextContent()).items.filter((i) => 'str' in i && i.str.trim() !== '') as Array<{ str: string; transform: number[] }>
+      const name = items.find((i) => i.str === 'ENCLAVE' && i.transform[5] > 792 - 90)
+      expect(name, 'ENCLAVE beside the cover mark').toBeDefined()
+      expect(name!.transform[4]).toBeGreaterThan(mark.x + mark.w)
+      expect(name!.transform[5]).toBeGreaterThanOrEqual(mark.y - 2)
+      expect(name!.transform[5]).toBeLessThanOrEqual(mark.y + mark.h)
+      const top = squash(items.filter((i) => i.transform[5] > 792 - 90).map((i) => i.str).join(' '))
+      expect(top).toContain(squash('WEBSITE AUDIT · FREE EDITION'))
+      expect(top).toContain(squash('10 Nov 2026'))
+    })
+
+    it('every page carries the real mark in its footer, as a picture: striped like the site logo, not a solid triangle; gold on the cover, ink on paper', async () => {
+      const bytes = await generateAuditPdf(reportFixture, { screenshot: PNG_SHOT })
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      for (let p = 1; p <= pageCount; p++) {
+        // the cover and the closing studio page are dark
+        const dark = p === 1 || p === pageCount
+        const marks = drawn.filter((d) => d.page === p && d.y < 52)
+        expect(marks, `one picture in the footer of page ${p}`).toHaveLength(1)
+        const mark = marks[0]
+        // the size of a capital in the footer's line, at the left margin, beside the word
+        expect(mark.h).toBeGreaterThanOrEqual(9)
+        expect(mark.h).toBeLessThanOrEqual(16)
+        expect(mark.x).toBeCloseTo(50, 0)
+        expectRealMark(mark, dark ? GOLD : INK, `page ${p}`)
+      }
+      // and no triangle is drawn as a path any more (the old mark: "M 4.5 0 L 9 8.5 L 0 8.5 Z")
+      const doc = await PDFDocument.load(bytes)
+      for (const page of doc.getPages()) expect(contentOf(doc, page)).not.toMatch(/\n4\.5 0 m\n9 -?8\.5 l\n0 -?8\.5 l\nh\n/)
+    })
+
+    it.each([
+      ['cannot be embedded', 'embed'],
+      ['fails to draw', 'draw'],
+    ] as const)('a mark picture that %s drops the picture only: the word stays and the report is whole', async (_, how) => {
+      const spies =
+        how === 'embed'
+          ? [vi.spyOn(PDFDocument.prototype, 'embedPng').mockRejectedValue(new Error('no png')), vi.spyOn(PDFDocument.prototype, 'embedJpg').mockRejectedValue(new Error('no jpg'))]
+          : [vi.spyOn(PDFPage.prototype, 'drawImage').mockImplementation(() => { throw new Error('no draw') })]
+      try {
+        const bytes = await generateAuditPdf(reportFixture, { userName: 'Dana Ortiz' })
+        expect((await drawnPictures(bytes)).drawn).toHaveLength(0)
+        const pages = await extract(bytes)
+        for (const page of pages) expect(page.lines.some((l) => l.startsWith('ENCLAVE')), page.lines.join(' | ')).toBe(true)
+        // the cover band: the name alone, and the edition line
+        expect(pages[0].lines.filter((l) => l.startsWith('ENCLAVE'))).toHaveLength(2)
+        expect(squash(pages[0].text)).toContain(squash('WEBSITE AUDIT · FREE EDITION'))
+        const all = bodyOf(pages)
+        for (const fix of reportFixture.fixes) expect(all).toContain(squash(fix.headline))
+        expect(all).toContain(squash('Schedule Your Free Consultation'))
+      } finally {
+        for (const s of spies) s.mockRestore()
+      }
+    })
+
+    it('a picture file missing from disk drops that picture only, says so once per file by name only, and the report is made', async () => {
+      // a copy of the repository's audit folder with the fonts and without the pictures
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-pdf-'))
+      fs.cpSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'fonts'), path.join(root, 'src', 'lib', 'audit', 'fonts'), { recursive: true })
+      const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root)
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.resetModules()
+      try {
+        const fresh = await import('@/lib/audit/generate-pdf')
+        // two reports in one process: the second says nothing new
+        await fresh.generateAuditPdf(reportFixture)
+        const bytes = await fresh.generateAuditPdf(reportFixture)
+        expect((await drawnPictures(bytes)).drawn).toHaveLength(0)
+        const all = bodyOf(await extract(bytes))
+        for (const fix of reportFixture.fixes) expect(all).toContain(squash(fix.headline))
+        // one line per picture file, its name only: no path, no error text
+        const said = warn.mock.calls.map((args) => args.join(' '))
+        expect(said.sort()).toEqual(Object.values(PICTURE_FILES).map((file) => `[audit-pdf] picture left out: ${file}`).sort())
+        for (const line of said) {
+          expect(line).not.toContain(root)
+          expect(line).not.toContain('ENOENT')
+        }
+      } finally {
+        warn.mockRestore()
+        cwd.mockRestore()
+        vi.resetModules()
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+  })
+
+  describe('the studio page', () => {
+    const PARTNERS = [
+      { name: 'ISIS', role: 'DESIGN AND BUILD' },
+      { name: 'OSIRIS', role: 'QUALITY REVIEW' },
+    ]
+    // a page's text items with their positions
+    async function itemsOf(bytes: Uint8Array, pageNumber: number) {
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const doc = await pdfjs.getDocument({ data: bytes.slice(), disableFontFace: true, useSystemFonts: false }).promise
+      const items = (await (await doc.getPage(pageNumber)).getTextContent()).items.filter((i) => 'str' in i && i.str.trim() !== '') as Array<{ str: string; transform: number[] }>
+      return items.map((i) => ({ str: i.str, x: i.transform[4], y: i.transform[5] }))
+    }
+
+    it('comes last, after the consultation block, with the two portraits, each named as an AI partner right under it, and nothing from the results', async () => {
+      const bytes = await generateAuditPdf(allAssessed, { userName: 'Dana Ortiz', screenshot: PNG_SHOT })
+      const pages = await extract(bytes)
+      const last = pages.length
+      expect(squash(pages[last - 2].text)).toContain(squash('Thank you for choosing Enclave Development'))
+      const studio = squash(pages[last - 1].text)
+      expect(studio).toContain(squash('ONE FOUNDER, SIX AI PARTNERS, ONE STUDIO.'))
+      expect(studio).toContain(squash('Your website, your follow-up and your content keep working after you close.'))
+      // the page holds only its own fixed words: no finding, fix, score or name of the site audited
+      for (const text of [...everyEvidence(allAssessed).map((e) => e.claim), ...allAssessed.fixes.map((f) => f.headline), 'riverside', '/10', 'Dana'])
+        expect(studio.toLowerCase()).not.toContain(squash(text).toLowerCase())
+      expect(/\d/.test(pages[last - 1].text)).toBe(false)
+
+      const { drawn } = await drawnPictures(bytes)
+      const portraits = drawn.filter((d) => d.page === last && d.y > 52)
+      expect(portraits).toHaveLength(2)
+      const items = await itemsOf(bytes, last)
+      portraits.sort((a, b) => a.x - b.x).forEach((photo, i) => {
+        // right under the picture, inside its width: the name, then "AI PARTNER · role"
+        const under = items.filter((t) => t.x >= photo.x - 1 && t.x < photo.x + photo.w && t.y < photo.y && t.y > photo.y - 50)
+        const said = squash(under.map((t) => t.str).join(' '))
+        expect(said, `caption of portrait ${i + 1}`).toBe(squash(`${PARTNERS[i].name} AI PARTNER · ${PARTNERS[i].role}`))
+      })
+    })
+
+    it('each caption sits under its own portrait: the picture drawn above a name is the file of that partner', async () => {
+      const bytes = await generateAuditPdf(reportFixture)
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      const items = await itemsOf(bytes, pageCount)
+      const portraits = drawn.filter((d) => d.page === pageCount && d.y > 52)
+      expect(portraits).toHaveLength(2)
+      for (const photo of portraits) {
+        const name = items.find((t) => t.x >= photo.x - 1 && t.x < photo.x + photo.w && t.y < photo.y && t.y > photo.y - 30)?.str.trim()
+        expect(['ISIS', 'OSIRIS']).toContain(name)
+        // a JPEG is held in the PDF byte for byte: the drawn picture is the named partner's own file
+        const file = PICTURE_FILES[name!.toLowerCase() as 'isis' | 'osiris']
+        expect(isFile(photo.image, file), `the picture above ${name} is ${file}`).toBe(true)
+      }
+    })
+
+    it('no portrait is drawn anywhere but the studio page: never on the cover beside the score, never on a paper page', async () => {
+      const bytes = await generateAuditPdf(allAssessed, { userName: 'Dana Ortiz', screenshot: PNG_SHOT })
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      const portraitFiles = [PICTURE_FILES.isis, PICTURE_FILES.osiris]
+      const elsewhere = drawn.filter((d) => d.page < pageCount && portraitFiles.some((file) => isFile(d.image, file)))
+      expect(elsewhere, 'portraits before the studio page').toHaveLength(0)
+      // and on the cover nothing is drawn but its two marks, neither larger than the band
+      const cover = drawn.filter((d) => d.page === 1)
+      expect(cover).toHaveLength(2)
+      for (const d of cover) expect(d.h).toBeLessThanOrEqual(30)
+    })
+
+    it('the paper pages draw no picture but the footer mark and the screenshot: findings stay evidence only', async () => {
+      const bytes = await generateAuditPdf(allAssessed, { screenshot: PNG_SHOT })
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      const paper = drawn.filter((d) => d.page > 1 && d.page < pageCount && d.y > 52)
+      expect(paper).toHaveLength(1)
+      expect(BUNDLED_SIZES.has(sizeOf(paper[0].image)), 'the one picture above a footer is the screenshot').toBe(false)
+    })
+
+    it('portraits that cannot be embedded leave no studio page, and the report is whole', async () => {
+      const jpg = vi.spyOn(PDFDocument.prototype, 'embedJpg').mockRejectedValue(new Error('no jpg'))
+      try {
+        const bytes = await generateAuditPdf(reportFixture)
+        const pages = await extract(bytes)
+        expect(bodyOf(pages)).not.toContain(squash('ONE STUDIO'))
+        expect(squash(pages.at(-1)!.text)).toContain(squash('Thank you for choosing Enclave Development'))
+        // the marks are still there: one per page, and the cover's large one
+        expect((await drawnPictures(bytes)).drawn).toHaveLength(pages.length + 1)
+      } finally {
+        jpg.mockRestore()
+      }
+    })
+
+    it('portraits that both fail to draw leave no studio page (not an empty one), and the report is whole', async () => {
+      const real = PDFPage.prototype.drawImage
+      const draw = vi.spyOn(PDFPage.prototype, 'drawImage').mockImplementation(function (this: PDFPage, image, options) {
+        // every portrait (the only pictures drawn wider than 200 points) fails
+        if (options && (options.width ?? 0) > 200) throw new Error('no draw')
+        return real.call(this, image, options)
+      })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const bytes = await generateAuditPdf(reportFixture)
+        const pages = await extract(bytes)
+        expect(bodyOf(pages)).not.toContain(squash('ONE STUDIO'))
+        expect(squash(pages.at(-1)!.text)).toContain(squash('Thank you for choosing Enclave Development'))
+        // the page numbers count the pages there are
+        expect(pages.at(-1)!.lines.at(-1)!.replace(/^ENCLAVE\s*/, '')).toBe(`${pages.length} / ${pages.length}`)
+        expect((await PDFDocument.load(bytes)).getPageCount()).toBe(pages.length)
+      } finally {
+        warn.mockRestore()
+        draw.mockRestore()
+      }
+    })
+
+    it('a portrait that fails to draw goes with its caption; the other stays', async () => {
+      const real = PDFPage.prototype.drawImage
+      const draw = vi.spyOn(PDFPage.prototype, 'drawImage').mockImplementation(function (this: PDFPage, image, options) {
+        // the first portrait (the widest picture drawn on a dark page) fails
+        if (options && (options.width ?? 0) > 200 && options.x === 50) throw new Error('no draw')
+        return real.call(this, image, options)
+      })
+      try {
+        const bytes = await generateAuditPdf(reportFixture)
+        const pages = await extract(bytes)
+        const studio = squash(pages.at(-1)!.text)
+        expect(studio).toContain(squash('ONE STUDIO'))
+        expect(studio).not.toContain('ISIS')
+        expect(studio).toContain(squash('OSIRIS AI PARTNER · QUALITY REVIEW'))
+        expect(bodyOf(pages)).toContain(squash(reportFixture.fixes[0].headline))
+      } finally {
+        draw.mockRestore()
+      }
     })
   })
 

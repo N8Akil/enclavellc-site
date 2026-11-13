@@ -2,7 +2,8 @@
 // The audit report as a designed PDF, made in plain JavaScript (pdf-lib + fontkit; no browser, no binary, no service).
 // The look follows the approved sample: a dark cover in the Night Crew colours, then paper pages printed in near-black
 // ink with gold as the accent (the gold used as text is the darker "gold ink", 4.9:1 on the paper).
-// Pages: 1 cover · 2 what works and the fixes · 3 the five areas · 4 how this was made, then the consultation block.
+// Pages: 1 cover · 2 what works and the fixes · 3 the five areas · 4 how this was made, then the consultation block ·
+// last, a dark page for the studio with its two office portraits (no finding sits beside a picture).
 // A section that does not fit carries on onto another page; text is never shrunk below 9.5 pt and nothing is cut.
 // Every word printed comes from the results, from present.ts or config.ts, or is a fixed label written here. The only
 // numbers printed are the results' own (scores, the date, counts in their text) and the page and fix numbering.
@@ -69,6 +70,72 @@ function fontFile(key: FontKey): Uint8Array {
     fontBytes.set(key, bytes);
   }
   return bytes;
+}
+
+// ---------- pictures (see docs/audit-system/PDF-LICENCES.md) ----------
+// Bundled with the site in src/lib/audit/images/ and read the same way as the fonts: nothing is fetched while a report
+// is made, and nothing is taken from the audited site. scripts/build-audit-pdf-images.py makes them, each at the size it
+// is drawn at. The mark is the site's own (the shape of public/night/logo-mark.png), in gold for the dark pages and in
+// ink for the paper pages.
+export const PICTURE_FILES = {
+  markGold: 'mark-gold.png',
+  markInk: 'mark-ink.png',
+  markCover: 'mark-cover.png',
+  isis: 'isis-office.jpg',
+  osiris: 'osiris-office.jpg',
+} as const;
+type PictureKey = keyof typeof PICTURE_FILES;
+type Pictures = Partial<Record<PictureKey, PDFImage>>;
+
+const pictureBytes = new Map<PictureKey, Uint8Array>();
+function pictureFile(key: PictureKey): Uint8Array {
+  let bytes = pictureBytes.get(key);
+  if (!bytes) {
+    // a copy that owns its memory: pdf-lib reads a Node Buffer's whole shared pool otherwise
+    bytes = Uint8Array.from(fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', PICTURE_FILES[key])));
+    pictureBytes.set(key, bytes);
+  }
+  return bytes;
+}
+
+// A picture left out is said once per process, by its file name only: never a path, never the error (whose text could
+// carry anything), never anything from the site audited.
+const warnedPictures = new Set<string>();
+function warnPictureLeftOut(key: PictureKey) {
+  const file = PICTURE_FILES[key];
+  if (warnedPictures.has(file)) return;
+  warnedPictures.add(file);
+  console.warn(`[audit-pdf] picture left out: ${file}`);
+}
+
+// A picture that cannot be read or embedded is left out, alone: the report is made without it.
+async function embedPictures(doc: PDFDocument): Promise<Pictures> {
+  const out: Pictures = {};
+  for (const key of Object.keys(PICTURE_FILES) as PictureKey[]) {
+    try {
+      const bytes = pictureFile(key);
+      const image = PICTURE_FILES[key].endsWith('.png') ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+      if (image.width > 0 && image.height > 0) out[key] = image;
+      else warnPictureLeftOut(key);
+    } catch {
+      warnPictureLeftOut(key);
+    }
+  }
+  return out;
+}
+
+// Draws a picture; one that fails to draw is left out, and the page carries on without it. (One that was never
+// embedded was already said at embedding.)
+function drawPicture(page: PDFPage, pics: Pictures, key: PictureKey, box: { x: number; y: number; width: number; height: number }): boolean {
+  const image = pics[key];
+  if (!image) return false;
+  try {
+    page.drawImage(image, box);
+    return true;
+  } catch {
+    warnPictureLeftOut(key);
+    return false;
+  }
 }
 
 // ---------- text that is safe to print ----------
@@ -316,42 +383,57 @@ class Flow {
   }
 }
 
-function drawMark(page: PDFPage, f: Fonts, x: number, baseline: number, triangle: RGB, word: RGB) {
-  page.drawSvgPath('M 4.5 0 L 9 8.5 L 0 8.5 Z', { x, y: baseline + 8, color: triangle });
-  page.drawText('ENCLAVE', { x: x + 14, y: baseline, font: f.monoMed, size: MIN, color: word });
+// The Enclave mark and the word, on one baseline. Without its picture the word stands alone.
+const MARK_H = 13;
+function drawMark(page: PDFPage, f: Fonts, x: number, baseline: number, pics: Pictures, key: 'markGold' | 'markInk', word: RGB) {
+  const mark = pics[key];
+  const w = mark ? (MARK_H * mark.width) / mark.height : 0;
+  const drawn = drawPicture(page, pics, key, { x, y: baseline - 2.5, width: w, height: MARK_H });
+  page.drawText('ENCLAVE', { x: drawn ? x + w + 6 : x, y: baseline, font: f.monoMed, size: MIN, color: word });
 }
 
-function drawFooter(page: PDFPage, f: Fonts, index: number, total: number) {
+function drawFooter(page: PDFPage, f: Fonts, pics: Pictures, index: number, total: number) {
   page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.line });
-  drawMark(page, f, ML, 36, C.ink, C.ink);
+  drawMark(page, f, ML, 36, pics, 'markInk', C.ink);
   const label = `${index} / ${total}`;
   const lw = width(label, { font: f.mono, size: MIN, color: C.dim });
   page.drawText(label, { x: W - MR - lw, y: 36, font: f.mono, size: MIN, color: C.dim });
 }
 
 // ---------- page 1: the cover ----------
-function drawCover(doc: PDFDocument, f: Fonts, r: AuditResults, userName: string) {
-  const page = doc.addPage([W, H]);
-  page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: C.night });
-
-  const headA = 'WEBSITE AUDIT';
-  const headB = ' · FREE EDITION';
-  page.drawText(headA, { x: ML, y: H - 52, font: f.monoMed, size: MIN, color: C.onNight });
-  page.drawText(headB, { x: ML + width(headA, { font: f.monoMed, size: MIN, color: C.onNight }), y: H - 52, font: f.mono, size: MIN, color: C.onNightDim });
-  const date = formatDate(r.auditDate);
-  if (date) {
-    const dw = width(date, { font: f.mono, size: MIN, color: C.onNightDim });
-    page.drawText(date, { x: W - MR - dw, y: H - 52, font: f.mono, size: MIN, color: C.onNightDim });
-  }
-  page.drawLine({ start: { x: ML, y: H - 62 }, end: { x: W - MR, y: H - 62 }, thickness: 0.75, color: C.nightLine });
-
-  // the stripe
-  const stripeTop = H - 78;
+// the stripe under the head of the dark pages
+function drawStripe(page: PDFPage, stripeTop = H - 78) {
   const bar = 16;
   const skew = 4;
   for (let x = ML + skew; x + bar <= W - MR; x += bar * 2) {
     page.drawSvgPath(`M ${skew} 0 L ${bar + skew} 0 L ${bar} 9 L 0 9 Z`, { x: x - skew, y: stripeTop, color: C.onNight, opacity: 0.9 });
   }
+}
+
+function drawCover(doc: PDFDocument, f: Fonts, pics: Pictures, r: AuditResults, userName: string) {
+  const page = doc.addPage([W, H]);
+  page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: C.night });
+
+  const headA = 'WEBSITE AUDIT';
+  const headB = ' · FREE EDITION';
+  const date = formatDate(r.auditDate);
+  // the band: the mark and the name on the left; the edition and the date stacked on the right. Without its picture
+  // the name stands alone
+  const markH = 26;
+  const mark = pics.markCover;
+  const mw = mark ? (markH * mark.width) / mark.height : 0;
+  const drawn = drawPicture(page, pics, 'markCover', { x: ML, y: H - 62, width: mw, height: markH });
+  page.drawText('ENCLAVE', { x: drawn ? ML + mw + 10 : ML, y: H - 61, font: f.xbold, size: 24, color: C.onNight });
+  const aw = width(headA, { font: f.monoMed, size: MIN, color: C.onNight });
+  const bw = width(headB, { font: f.mono, size: MIN, color: C.onNightDim });
+  page.drawText(headA, { x: W - MR - aw - bw, y: H - 46, font: f.monoMed, size: MIN, color: C.onNight });
+  page.drawText(headB, { x: W - MR - bw, y: H - 46, font: f.mono, size: MIN, color: C.onNightDim });
+  if (date) {
+    const dw = width(date, { font: f.mono, size: MIN, color: C.onNightDim });
+    page.drawText(date, { x: W - MR - dw, y: H - 61, font: f.mono, size: MIN, color: C.onNightDim });
+  }
+  page.drawLine({ start: { x: ML, y: H - 72 }, end: { x: W - MR, y: H - 72 }, thickness: 0.75, color: C.nightLine });
+  drawStripe(page, H - 86);
 
   // the site: its address in mono gold, its name in large type, sized down until it fits in three lines
   let y = H - 150;
@@ -408,7 +490,7 @@ function drawCover(doc: PDFDocument, f: Fonts, r: AuditResults, userName: string
   }
 
   page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.nightLine });
-  drawMark(page, f, ML, 36, C.gold, C.onNight);
+  drawMark(page, f, ML, 36, pics, 'markGold', C.onNight);
   const site = 'enclavellc.net';
   page.drawText(site, { x: W - MR - width(site, { font: f.mono, size: MIN, color: C.onNightDim }), y: 36, font: f.mono, size: MIN, color: C.onNightDim });
 }
@@ -792,6 +874,78 @@ function drawHowMade(flow: Flow, f: Fonts, r: AuditResults) {
   flow.text([{ text: 'Thank you for choosing Enclave Development', font: f.italic, size: BODY, color: C.dim }], { align: 'center', leading: 1.4 });
 }
 
+// ---------- the last page: the studio ----------
+// A dark page after the report, set apart from every finding, so no picture can read as evidence for one. Its words
+// are the site's own (the home page's line and the crew's roles); each portrait is named as an AI partner right under it.
+export const STUDIO_HEADING = 'One founder, six AI partners, one studio.';
+export const STUDIO_LINE = 'Your website, your follow-up and your content keep working after you close.';
+export const STUDIO_PARTNERS: Array<{ key: 'isis' | 'osiris'; name: string; role: string }> = [
+  { key: 'isis', name: 'Isis', role: 'Design and build' },
+  { key: 'osiris', name: 'Osiris', role: 'Quality review' },
+];
+export const AI_PARTNER_LABEL = 'AI partner';
+
+function drawStudio(doc: PDFDocument, f: Fonts, pics: Pictures) {
+  const partners = STUDIO_PARTNERS.filter((p) => pics[p.key]);
+  // the page is there for its pictures: with none of them embedded, or none of them drawn (below), there is no page
+  if (partners.length === 0) return;
+  const page = doc.addPage([W, H]);
+  const pageIndex = doc.getPageCount() - 1;
+  page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: C.night });
+
+  const headA = 'WEBSITE AUDIT';
+  const headB = ' · FREE EDITION';
+  page.drawText(headA, { x: ML, y: H - 52, font: f.monoMed, size: MIN, color: C.onNight });
+  page.drawText(headB, { x: ML + width(headA, { font: f.monoMed, size: MIN, color: C.onNight }), y: H - 52, font: f.mono, size: MIN, color: C.onNightDim });
+  page.drawLine({ start: { x: ML, y: H - 62 }, end: { x: W - MR, y: H - 62 }, thickness: 0.75, color: C.nightLine });
+  drawStripe(page);
+
+  // the heading a phrase to a line
+  let y = H - 112;
+  const headSize = 44;
+  for (const phrase of STUDIO_HEADING.toUpperCase().split(/(?<=,) /)) {
+    for (const line of wrap([{ text: phrase, font: f.black, size: headSize, color: C.onNight }], CW)) {
+      y -= headSize * 0.92;
+      drawLine(page, line, ML, y);
+    }
+  }
+  y -= 12;
+  const lineSize = 14;
+  const lh = lineSize * 1.4;
+  for (const line of wrap([{ text: STUDIO_LINE, font: f.sans, size: lineSize, color: C.onNightDim }], CW)) {
+    drawLine(page, line, ML, baselineOf(y, lh, lineSize));
+    y -= lh;
+  }
+
+  // the portraits, side by side, each named under it
+  const gap = 18;
+  const colW = (CW - gap) / 2;
+  const top = y - 24;
+  let portraits = 0;
+  partners.forEach((p, i) => {
+    const image = pics[p.key]!;
+    const x = ML + i * (colW + gap);
+    const h = (colW * image.height) / image.width;
+    if (!drawPicture(page, pics, p.key, { x, y: top - h, width: colW, height: h })) return;
+    portraits += 1;
+    let cy = top - h - 26;
+    page.drawText(p.name.toUpperCase(), { x, y: cy, font: f.xbold, size: 22, color: C.onNight });
+    cy -= 17;
+    const label = AI_PARTNER_LABEL.toUpperCase();
+    page.drawText(label, { x, y: cy, font: f.monoMed, size: MIN, color: C.gold });
+    page.drawText(` · ${p.role.toUpperCase()}`, { x: x + width(label, { font: f.monoMed, size: MIN, color: C.gold }), y: cy, font: f.mono, size: MIN, color: C.onNightDim });
+  });
+  if (portraits === 0) {
+    doc.removePage(pageIndex);
+    return;
+  }
+
+  page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.nightLine });
+  drawMark(page, f, ML, 36, pics, 'markGold', C.onNight);
+  const site = 'enclavellc.net';
+  page.drawText(site, { x: W - MR - width(site, { font: f.mono, size: MIN, color: C.onNightDim }), y: 36, font: f.mono, size: MIN, color: C.onNightDim });
+}
+
 // ---------- the document ----------
 export async function generateAuditPdf(rawResults: AuditResults, options?: { userName?: string; screenshot?: PhoneShot }): Promise<Uint8Array> {
   const r = cleanDeep(rawResults);
@@ -817,13 +971,15 @@ export async function generateAuditPdf(rawResults: AuditResults, options?: { use
     doc.setModificationDate(made);
   }
 
-  drawCover(doc, fonts, r, userName);
+  const pics = await embedPictures(doc);
+  drawCover(doc, fonts, pics, r, userName);
   const flow = new Flow(doc, fonts, host);
   drawShortVersion(flow, fonts, r);
   drawAreas(flow, fonts, r, await embedShot(doc, options?.screenshot));
   drawHowMade(flow, fonts, r);
+  drawStudio(doc, fonts, pics);
 
   const total = doc.getPageCount();
-  flow.pages.forEach((page, i) => drawFooter(page, fonts, i + 2, total));
+  flow.pages.forEach((page, i) => drawFooter(page, fonts, pics, i + 2, total));
   return doc.save();
 }
