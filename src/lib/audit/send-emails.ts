@@ -6,7 +6,8 @@ import { HOW_MADE_HEADING, areasAssessedPhrase, assessedAreas, evidenceLine, how
 import type { AuditResults } from './types';
 
 interface SendEmailsOptions {
-  document: Buffer;
+  // the report, a PDF (generate-pdf.ts)
+  document: Uint8Array;
   userEmail: string;
   userName?: string;
   adminEmail: string;
@@ -21,18 +22,35 @@ export interface SendEmailsResult {
   error?: string;
 }
 
+// "example.com-website-audit.pdf". A URL's host can still hold underscores, quotes, semicolons, brackets (an IPv6
+// address) and a trailing dot, so the host is reduced to lowercase letters, digits, dots and hyphens: any other run
+// becomes one hyphen, leading and trailing dots and hyphens go, and it is cut at 60 characters. With nothing left
+// (or a URL that cannot be read) the name is "website-audit.pdf".
+export function reportFilename(websiteUrl: string): string {
+  let host = '';
+  try {
+    host = new URL(websiteUrl).hostname;
+  } catch {
+    // no readable host: the plain name
+  }
+  const safe = host
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]+/g, '-')
+    .replace(/^[.-]+/, '')
+    .slice(0, 60)
+    .replace(/[.-]+$/, '');
+  return safe ? `${safe}-website-audit.pdf` : 'website-audit.pdf';
+}
+
 export async function sendAuditEmails(options: SendEmailsOptions): Promise<SendEmailsResult> {
   const { document, userEmail, adminEmail, websiteUrl, auditResults } = options;
   const userName = options.userName?.slice(0, 100);
 
-  const documentBase64 = document.toString('base64');
-  const filename = `Website-Audit-${new URL(websiteUrl).hostname}-${new Date().toISOString().split('T')[0]}.docx`;
-
   const attachments = [
     {
-      filename,
-      content: documentBase64,
-      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      filename: reportFilename(websiteUrl),
+      content: Buffer.from(document).toString('base64'),
+      contentType: 'application/pdf'
     }
   ];
 

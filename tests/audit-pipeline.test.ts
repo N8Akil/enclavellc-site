@@ -25,7 +25,7 @@ function stages(overrides: PipelineDeps = {}) {
   const mocks = {
     fetchSite: vi.fn(async (..._args: unknown[]) => (calls.push('fetch'), content)),
     audit: vi.fn(async (..._args: unknown[]) => (calls.push('model'), auditFixture)),
-    makeDocument: vi.fn(async (..._args: unknown[]) => (calls.push('document'), Buffer.from('docx'))),
+    makeDocument: vi.fn(async (..._args: unknown[]) => (calls.push('document'), Buffer.from('%PDF-'))),
     sendReport: vi.fn(async (..._args: unknown[]) => (calls.push('report mails'), { success: true, userSent: true, adminSent: true })),
     sendFailure: vi.fn(async (..._args: unknown[]) => (calls.push('failure mails'), { userSent: true, adminSent: true, errors: [] as string[] })),
   }
@@ -109,7 +109,7 @@ describe('runAuditJob', () => {
       const outcome = await runAuditJob(job, {
         fetchSite: async () => ({ pages: [page] }),
         audit: (c, url, options, deps) => runAudit(c, url, options, { ...deps, client: { messages: { create } } as never }),
-        makeDocument: async () => Buffer.from('docx'),
+        makeDocument: async () => Buffer.from('%PDF-'),
         sendReport,
       })
       expect(outcome).toBe('sent')

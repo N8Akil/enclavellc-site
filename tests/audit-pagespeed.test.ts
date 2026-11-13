@@ -418,6 +418,26 @@ describe('runAuditJob with PageSpeed', () => {
   })
 })
 
+describe('the screenshot reaches the report document only', () => {
+  const shot = { mediaType: 'image/png', dataBase64: 'iVBORw0KGgo=' }
+  const measured = async (): Promise<Measurements> => ({ ok: true, measures: {}, screenshot: shot })
+
+  it('given to the document (as an option) when the model was shown it, and never in the email', async () => {
+    const { mocks, deps } = stages({ measure: measured, audit: vi.fn(async (..._a: unknown[]) => ({ ...auditFixture, screenshotTaken: true as const })) as never })
+    await runAuditJob(job, deps)
+    expect(mocks.makeDocument.mock.calls[0][1]).toEqual({ userName: job.userName, screenshot: shot })
+    expect(JSON.stringify(mocks.sendReport.mock.calls[0])).not.toContain(shot.dataBase64)
+  })
+
+  it('not given when the model was not shown one, or there is none', async () => {
+    for (const measure of [measured, async (): Promise<Measurements> => ({ ok: false, reason: 'no_key' })]) {
+      const { mocks, deps } = stages({ measure })
+      await runAuditJob(job, deps)
+      expect(mocks.makeDocument.mock.calls[0][1]).toEqual({ userName: job.userName })
+    }
+  })
+})
+
 describe('with the fixture measured: Speed is offered and a measure citation verifies', () => {
   const run = async (reply: unknown) => {
     const { audit, create } = realModelStep(reply)

@@ -4,7 +4,7 @@
 // Log lines carry the request id, the stage and an error code. Never the visitor's details, the site or its text.
 import type { Niche } from './config';
 import { fetchWebsiteContent } from './fetch-website';
-import { generateAuditDocument } from './generate-document';
+import { generateAuditPdf } from './generate-pdf';
 import { sendFailureMails, type Lead } from './notify';
 import { PAGESPEED_TIMEOUT_MS, pageSpeedMeasurements } from './pagespeed';
 import { runAudit } from './run-audit';
@@ -28,7 +28,7 @@ export interface PipelineDeps {
   fetchSite?: typeof fetchWebsiteContent;
   measure?: Measure;
   audit?: typeof runAudit;
-  makeDocument?: typeof generateAuditDocument;
+  makeDocument?: typeof generateAuditPdf;
   sendReport?: typeof sendAuditEmails;
   sendFailure?: typeof sendFailureMails;
 }
@@ -102,7 +102,11 @@ export async function runAuditJob(job: AuditJob, deps: PipelineDeps = {}): Promi
 
     stage = 'document';
     console.log(`${tag} generating document`);
-    const document = await (deps.makeDocument ?? generateAuditDocument)(result as AuditResults, { userName: job.userName });
+    const document = await (deps.makeDocument ?? generateAuditPdf)(result as AuditResults, {
+      userName: job.userName,
+      // the picture the model was shown, for the report only (never the email body, never the model again)
+      ...(measurements.ok === true && measurements.screenshot && (result as AuditResults).screenshotTaken ? { screenshot: measurements.screenshot } : {}),
+    });
 
     stage = 'email';
     console.log(`${tag} sending emails`);

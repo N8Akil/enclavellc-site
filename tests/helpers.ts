@@ -1,5 +1,4 @@
 import { inspect } from 'node:util'
-import { inflateRawSync } from 'node:zlib'
 import { expect, vi, type MockInstance } from 'vitest'
 import { NextRequest } from 'next/server'
 import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
@@ -85,7 +84,7 @@ export const auditFixture = {
 } satisfies AuditResults
 
 // A report with every kind of evidence in it, both kinds of unassessed area, the home-care name and call-outs:
-// what the .docx and the emails must be able to render.
+// what the PDF report and the emails must be able to render.
 export const REPORT_SITE = 'https://doc.example.test'
 export const EVIL_QUOTE = 'Call now <script>alert("x")</script> & save today'
 export const reportFixture: AuditResults = {
@@ -170,30 +169,6 @@ export const reportFixture: AuditResults = {
   pagesRead: [`${REPORT_SITE}/`, `${REPORT_SITE}/about`, `${REPORT_SITE}/services?x=1`],
   linksChecked: 18,
   droppedFindings: 2,
-}
-
-// The text of a .docx's main part (word/document.xml), read straight from the zip with node:zlib.
-export function docxXml(docx: Buffer): string {
-  const eocd = docx.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
-  if (eocd < 0) throw new Error('not a zip')
-  const entries = docx.readUInt16LE(eocd + 10)
-  let at = docx.readUInt32LE(eocd + 16)
-  for (let i = 0; i < entries; i++) {
-    const method = docx.readUInt16LE(at + 10)
-    const compressedSize = docx.readUInt32LE(at + 20)
-    const nameLength = docx.readUInt16LE(at + 28)
-    const extraLength = docx.readUInt16LE(at + 30)
-    const commentLength = docx.readUInt16LE(at + 32)
-    const localAt = docx.readUInt32LE(at + 42)
-    const name = docx.toString('utf8', at + 46, at + 46 + nameLength)
-    if (name === 'word/document.xml') {
-      const dataAt = localAt + 30 + docx.readUInt16LE(localAt + 26) + docx.readUInt16LE(localAt + 28)
-      const data = docx.subarray(dataAt, dataAt + compressedSize)
-      return (method === 0 ? data : inflateRawSync(data)).toString('utf8')
-    }
-    at += 46 + nameLength + extraLength + commentLength
-  }
-  throw new Error('word/document.xml not found')
 }
 
 export const resendOk = (id = 'em_test_1') => ({ data: { id }, error: null, headers: null })

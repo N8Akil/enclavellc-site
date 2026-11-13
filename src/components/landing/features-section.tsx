@@ -50,7 +50,7 @@ export function FeaturesSection() {
                             </li>
                             <li className="flex items-start gap-2">
                                 <span className="text-orange-500 mt-1">•</span>
-                                <span>Professional .docx report delivered</span>
+                                <span>Professional PDF report delivered</span>
                             </li>
                             <li className="flex items-start gap-2">
                                 <span className="text-orange-500 mt-1">•</span>
