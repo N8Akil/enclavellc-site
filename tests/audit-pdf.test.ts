@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+import * as fs from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { deflateSync } from 'node:zlib'
-import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib'
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFNumber, PDFPage, PDFRawStream, decodePDFRawStream } from 'pdf-lib'
 import { NOT_MEASURED_SENTENCE, UNSUPPORTED_SENTENCE } from '@/lib/audit/config'
-import { barFill, generateAuditPdf } from '@/lib/audit/generate-pdf'
+import { PICTURE_FILES, barFill, generateAuditPdf, readImageSize } from '@/lib/audit/generate-pdf'
 import { howMadeText } from '@/lib/audit/present'
 import type { AuditResults, Evidence } from '@/lib/audit/types'
 import { REPORT_SITE, reportFixture } from './helpers'
@@ -156,19 +159,90 @@ function jpegWithWidth(width: number): string {
 }
 const WEBP_SHOT = { mediaType: 'image/webp', dataBase64: Buffer.from('RIFF\0\0\0\0WEBPVP8 ').toString('base64') }
 
-// how many picture objects the PDF holds, and the page numbers (from 1) whose resources use one
+// The pictures bundled with the report (the mark, the studio page) by their pixel size; none is the size of a test
+// screenshot, so an image object of any other size is the screenshot.
+const BUNDLED_SIZES = new Set(
+  Object.values(PICTURE_FILES ?? {}).map((file) => {
+    const bytes = fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', file))
+    const size = readImageSize(bytes, file.endsWith('.png') ? 'image/png' : 'image/jpeg')
+    return `${size?.width}x${size?.height}`
+  })
+)
+const BUNDLED_BYTES = Object.values(PICTURE_FILES ?? {}).map((file) => fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', file)))
+// the calls of an embedJpg/embedPng spy that were handed anything other than a bundled picture
+const nonBundledCalls = (spy: { mock: { calls: unknown[][] } }) => spy.mock.calls.filter(([input]) => !BUNDLED_BYTES.some((b) => input instanceof Uint8Array && Buffer.from(input).equals(b)))
+const isImage = (obj: unknown): obj is PDFRawStream => obj instanceof PDFRawStream && obj.dict.get(PDFName.of('Subtype'))?.toString() === '/Image'
+const sizeOf = (image: PDFRawStream) => `${(image.dict.get(PDFName.of('Width')) as PDFNumber).asNumber()}x${(image.dict.get(PDFName.of('Height')) as PDFNumber).asNumber()}`
+const isScreenshot = (obj: unknown) => isImage(obj) && !BUNDLED_SIZES.has(sizeOf(obj))
+
+// how many screenshot pictures the PDF holds, and the page numbers (from 1) whose resources use one
 async function pictures(bytes: Uint8Array): Promise<{ count: number; pages: number[] }> {
   const doc = await PDFDocument.load(bytes)
   let count = 0
-  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
-    if (obj instanceof PDFRawStream && obj.dict.get(PDFName.of('Subtype'))?.toString() === '/Image') count++
-  }
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) if (isScreenshot(obj)) count++
   const pages: number[] = []
   doc.getPages().forEach((page, i) => {
     const xobjects = page.node.Resources()?.lookupMaybe(PDFName.of('XObject'), PDFDict)
-    if (xobjects && xobjects.keys().length > 0) pages.push(i + 1)
+    if (xobjects?.keys().some((k) => isScreenshot(xobjects.lookup(k)))) pages.push(i + 1)
   })
   return { count, pages }
+}
+
+// a page's drawing operators, all its content streams in order
+function contentOf(doc: PDFDocument, page: PDFPage): string {
+  const look = doc.context.lookup(page.node.get(PDFName.of('Contents')))
+  const streams = look instanceof PDFArray ? look.asArray().map((r) => doc.context.lookup(r)) : [look]
+  return streams.map((s) => Buffer.from(decodePDFRawStream(s as PDFRawStream).decode()).toString('latin1')).join('\n')
+}
+
+// Every picture actually drawn ("Do" in a page's content), with the box it is drawn in (points) and its image object.
+interface DrawnPicture {
+  page: number
+  x: number
+  y: number
+  w: number
+  h: number
+  image: PDFRawStream
+}
+async function drawnPictures(bytes: Uint8Array): Promise<{ pageCount: number; drawn: DrawnPicture[] }> {
+  const doc = await PDFDocument.load(bytes)
+  const drawn: DrawnPicture[] = []
+  doc.getPages().forEach((page, i) => {
+    const xobjects = page.node.Resources()?.lookupMaybe(PDFName.of('XObject'), PDFDict)
+    const lines = contentOf(doc, page).split('\n')
+    const open: number[] = []
+    lines.forEach((line, k) => {
+      if (line === 'q') open.push(k)
+      else if (line === 'Q') open.pop()
+      const named = line.match(/^\/(\S+) Do$/)
+      if (!named || !xobjects) return
+      const image = xobjects.lookup(PDFName.of(named[1]))
+      if (!isImage(image)) return
+      // the transformation set up inside this q ... Q block, composed in order
+      let m = [1, 0, 0, 1, 0, 0]
+      for (const l of lines.slice(open[open.length - 1] ?? 0, k)) {
+        const cm = l.match(/^(\S+) (\S+) (\S+) (\S+) (\S+) (\S+) cm$/)
+        if (!cm) continue
+        const [a, b, c, d, e, f] = cm.slice(1).map(Number)
+        m = [a * m[0] + b * m[2], a * m[1] + b * m[3], c * m[0] + d * m[2], c * m[1] + d * m[3], e * m[0] + f * m[2] + m[4], e * m[1] + f * m[3] + m[5]]
+      }
+      drawn.push({ page: i + 1, x: m[4], y: m[5], w: m[0], h: m[3], image })
+    })
+  })
+  return { pageCount: doc.getPageCount(), drawn }
+}
+
+// an image object's pixels (8 bits per component, Flate, no predictor: how pdf-lib stores a PNG) and its alpha
+function pixelsOf(image: PDFRawStream): { width: number; height: number; rgb: Uint8Array; alpha: Uint8Array | null } {
+  const width = (image.dict.get(PDFName.of('Width')) as PDFNumber).asNumber()
+  const height = (image.dict.get(PDFName.of('Height')) as PDFNumber).asNumber()
+  const smask = image.dict.lookup(PDFName.of('SMask'))
+  return {
+    width,
+    height,
+    rgb: decodePDFRawStream(image).decode(),
+    alpha: smask instanceof PDFRawStream ? decodePDFRawStream(smask).decode() : null,
+  }
 }
 
 const SITE = 'https://riverside-care.example.test'
@@ -546,8 +620,9 @@ describe('generateAuditPdf', () => {
           expect((await pictures(bytes)).count).toBe(0)
           expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
         }
-        expect(png, 'embedPng not attempted').not.toHaveBeenCalled()
-        expect(jpg, 'embedJpg not attempted').not.toHaveBeenCalled()
+        // (the bundled pictures are embedded as always; the screenshot never is)
+        expect(nonBundledCalls(png), 'embedPng not attempted').toHaveLength(0)
+        expect(nonBundledCalls(jpg), 'embedJpg not attempted').toHaveLength(0)
       } finally {
         jpg.mockRestore()
         png.mockRestore()
@@ -563,8 +638,8 @@ describe('generateAuditPdf', () => {
           expect((await pictures(bytes)).count).toBe(0)
           expect(bodyOf(await extract(bytes))).not.toContain(squash(SHOT_CAPTION))
         }
-        expect(png).not.toHaveBeenCalled()
-        expect(jpg).not.toHaveBeenCalled()
+        expect(nonBundledCalls(png)).toHaveLength(0)
+        expect(nonBundledCalls(jpg)).toHaveLength(0)
       } finally {
         jpg.mockRestore()
         png.mockRestore()
@@ -594,6 +669,87 @@ describe('generateAuditPdf', () => {
     it('the caption has no digit, so no number is printed that is not in the results', async () => {
       expect(/\d/.test(SHOT_CAPTION)).toBe(false)
       expectNoInventedNumbers(await extract(await generateAuditPdf(withCallouts, { userName: 'Dana Ortiz', screenshot: PNG_SHOT })), withCallouts)
+    })
+  })
+
+  describe('the Enclave mark', () => {
+    // How many times a row of the picture, at this share of its height from the top, goes from clear to solid.
+    // The real mark is stripes: a row through its middle enters a solid part many times. A filled triangle, once.
+    function solidRuns(alpha: Uint8Array, width: number, height: number, at: number): number {
+      const row = Math.round(height * at) * width
+      let runs = 0
+      for (let x = 0; x < width; x++) if (alpha[row + x] >= 128 && (x === 0 || alpha[row + x - 1] < 128)) runs++
+      return runs
+    }
+
+    it('every page carries the real mark in its footer, as a picture: striped like the site logo, not a solid triangle; gold on the cover, ink on paper', async () => {
+      const bytes = await generateAuditPdf(reportFixture, { screenshot: PNG_SHOT })
+      const { pageCount, drawn } = await drawnPictures(bytes)
+      for (let p = 1; p <= pageCount; p++) {
+        const dark = p === 1
+        const marks = drawn.filter((d) => d.page === p && d.y < 52)
+        expect(marks, `one picture in the footer of page ${p}`).toHaveLength(1)
+        const mark = marks[0]
+        // the size of a capital in the footer's line, at the left margin, beside the word
+        expect(mark.h).toBeGreaterThanOrEqual(9)
+        expect(mark.h).toBeLessThanOrEqual(14)
+        expect(mark.x).toBeCloseTo(50, 0)
+        const { width, height, rgb, alpha } = pixelsOf(mark.image)
+        expect(alpha, 'the mark has a transparent ground, so the page shows through').not.toBeNull()
+        // crisp in print: at least 600 pixels to the inch at the size it is drawn
+        expect(height / (mark.h / 72)).toBeGreaterThanOrEqual(600)
+        // the shape is the striped mark
+        for (const at of [0.45, 0.6, 0.75]) expect(solidRuns(alpha!, width, height, at), `solid runs across row ${at}`).toBeGreaterThanOrEqual(4)
+        const solid = alpha!.reduce((n, a) => n + (a >= 128 ? 1 : 0), 0) / (width * height)
+        expect(solid, 'a filled triangle covers half of its box; the mark is mostly gaps').toBeLessThan(0.4)
+        expect(solid).toBeGreaterThan(0.1)
+        // its colour, where it is solid
+        const at = alpha!.findIndex((a) => a === 255)
+        expect([rgb[at * 3], rgb[at * 3 + 1], rgb[at * 3 + 2]], `colour of the mark on page ${p}`).toEqual(dark ? [0xe8, 0xb0, 0x4b] : [0x1a, 0x17, 0x14])
+      }
+      // and no triangle is drawn as a path any more (the old mark: "M 4.5 0 L 9 8.5 L 0 8.5 Z")
+      const doc = await PDFDocument.load(bytes)
+      for (const page of doc.getPages()) expect(contentOf(doc, page)).not.toMatch(/\n4\.5 0 m\n9 -?8\.5 l\n0 -?8\.5 l\nh\n/)
+    })
+
+    it.each([
+      ['cannot be embedded', 'embed'],
+      ['fails to draw', 'draw'],
+    ] as const)('a mark picture that %s drops the picture only: the word stays and the report is whole', async (_, how) => {
+      const spies =
+        how === 'embed'
+          ? [vi.spyOn(PDFDocument.prototype, 'embedPng').mockRejectedValue(new Error('no png')), vi.spyOn(PDFDocument.prototype, 'embedJpg').mockRejectedValue(new Error('no jpg'))]
+          : [vi.spyOn(PDFPage.prototype, 'drawImage').mockImplementation(() => { throw new Error('no draw') })]
+      try {
+        const bytes = await generateAuditPdf(reportFixture, { userName: 'Dana Ortiz' })
+        expect((await drawnPictures(bytes)).drawn).toHaveLength(0)
+        const pages = await extract(bytes)
+        for (const page of pages) expect(page.lines.some((l) => l.startsWith('ENCLAVE')), page.lines.join(' | ')).toBe(true)
+        const all = bodyOf(pages)
+        for (const fix of reportFixture.fixes) expect(all).toContain(squash(fix.headline))
+        expect(all).toContain(squash('Schedule Your Free Consultation'))
+      } finally {
+        for (const s of spies) s.mockRestore()
+      }
+    })
+
+    it('a picture file missing from disk drops that picture only, and the report is made', async () => {
+      // a copy of the repository's audit folder with the fonts and without the pictures
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-pdf-'))
+      fs.cpSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'fonts'), path.join(root, 'src', 'lib', 'audit', 'fonts'), { recursive: true })
+      const cwd = vi.spyOn(process, 'cwd').mockReturnValue(root)
+      vi.resetModules()
+      try {
+        const fresh = await import('@/lib/audit/generate-pdf')
+        const bytes = await fresh.generateAuditPdf(reportFixture)
+        expect((await drawnPictures(bytes)).drawn).toHaveLength(0)
+        const all = bodyOf(await extract(bytes))
+        for (const fix of reportFixture.fixes) expect(all).toContain(squash(fix.headline))
+      } finally {
+        cwd.mockRestore()
+        vi.resetModules()
+        fs.rmSync(root, { recursive: true, force: true })
+      }
     })
   })
 

@@ -71,6 +71,55 @@ function fontFile(key: FontKey): Uint8Array {
   return bytes;
 }
 
+// ---------- pictures (see docs/audit-system/PDF-LICENCES.md) ----------
+// Bundled with the site in src/lib/audit/images/ and read the same way as the fonts: nothing is fetched while a report
+// is made, and nothing is taken from the audited site. scripts/build-audit-pdf-images.py makes them, each at the size it
+// is drawn at. The mark is the site's own (the shape of public/night/logo-mark.png), in gold for the dark pages and in
+// ink for the paper pages.
+export const PICTURE_FILES = {
+  markGold: 'mark-gold.png',
+  markInk: 'mark-ink.png',
+} as const;
+type PictureKey = keyof typeof PICTURE_FILES;
+type Pictures = Partial<Record<PictureKey, PDFImage>>;
+
+const pictureBytes = new Map<PictureKey, Uint8Array>();
+function pictureFile(key: PictureKey): Uint8Array {
+  let bytes = pictureBytes.get(key);
+  if (!bytes) {
+    // a copy that owns its memory: pdf-lib reads a Node Buffer's whole shared pool otherwise
+    bytes = Uint8Array.from(fs.readFileSync(path.join(process.cwd(), 'src', 'lib', 'audit', 'images', PICTURE_FILES[key])));
+    pictureBytes.set(key, bytes);
+  }
+  return bytes;
+}
+
+// A picture that cannot be read or embedded is left out, alone: the report is made without it.
+async function embedPictures(doc: PDFDocument): Promise<Pictures> {
+  const out: Pictures = {};
+  for (const key of Object.keys(PICTURE_FILES) as PictureKey[]) {
+    try {
+      const bytes = pictureFile(key);
+      const image = PICTURE_FILES[key].endsWith('.png') ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+      if (image.width > 0 && image.height > 0) out[key] = image;
+    } catch {
+      // no picture
+    }
+  }
+  return out;
+}
+
+// Draws a picture; one that fails to draw is left out, and the page carries on without it.
+function drawPicture(page: PDFPage, image: PDFImage | undefined, box: { x: number; y: number; width: number; height: number }): boolean {
+  if (!image) return false;
+  try {
+    page.drawImage(image, box);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- text that is safe to print ----------
 // Control and invisible formatting characters (zero-width and bidi marks, line and paragraph separators, variation
 // selectors, the tag block) are removed (page quotes and the visitor's name can carry them);
@@ -316,21 +365,34 @@ class Flow {
   }
 }
 
-function drawMark(page: PDFPage, f: Fonts, x: number, baseline: number, triangle: RGB, word: RGB) {
-  page.drawSvgPath('M 4.5 0 L 9 8.5 L 0 8.5 Z', { x, y: baseline + 8, color: triangle });
-  page.drawText('ENCLAVE', { x: x + 14, y: baseline, font: f.monoMed, size: MIN, color: word });
+// The Enclave mark and the word, on one baseline. Without its picture the word stands alone.
+const MARK_H = 11;
+function drawMark(page: PDFPage, f: Fonts, x: number, baseline: number, mark: PDFImage | undefined, word: RGB) {
+  const w = mark ? (MARK_H * mark.width) / mark.height : 0;
+  const drawn = drawPicture(page, mark, { x, y: baseline - 1.5, width: w, height: MARK_H });
+  page.drawText('ENCLAVE', { x: drawn ? x + w + 6 : x, y: baseline, font: f.monoMed, size: MIN, color: word });
 }
 
-function drawFooter(page: PDFPage, f: Fonts, index: number, total: number) {
+function drawFooter(page: PDFPage, f: Fonts, pics: Pictures, index: number, total: number) {
   page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.line });
-  drawMark(page, f, ML, 36, C.ink, C.ink);
+  drawMark(page, f, ML, 36, pics.markInk, C.ink);
   const label = `${index} / ${total}`;
   const lw = width(label, { font: f.mono, size: MIN, color: C.dim });
   page.drawText(label, { x: W - MR - lw, y: 36, font: f.mono, size: MIN, color: C.dim });
 }
 
 // ---------- page 1: the cover ----------
-function drawCover(doc: PDFDocument, f: Fonts, r: AuditResults, userName: string) {
+// the stripe under the head of the dark pages
+function drawStripe(page: PDFPage) {
+  const stripeTop = H - 78;
+  const bar = 16;
+  const skew = 4;
+  for (let x = ML + skew; x + bar <= W - MR; x += bar * 2) {
+    page.drawSvgPath(`M ${skew} 0 L ${bar + skew} 0 L ${bar} 9 L 0 9 Z`, { x: x - skew, y: stripeTop, color: C.onNight, opacity: 0.9 });
+  }
+}
+
+function drawCover(doc: PDFDocument, f: Fonts, pics: Pictures, r: AuditResults, userName: string) {
   const page = doc.addPage([W, H]);
   page.drawRectangle({ x: 0, y: 0, width: W, height: H, color: C.night });
 
@@ -344,14 +406,7 @@ function drawCover(doc: PDFDocument, f: Fonts, r: AuditResults, userName: string
     page.drawText(date, { x: W - MR - dw, y: H - 52, font: f.mono, size: MIN, color: C.onNightDim });
   }
   page.drawLine({ start: { x: ML, y: H - 62 }, end: { x: W - MR, y: H - 62 }, thickness: 0.75, color: C.nightLine });
-
-  // the stripe
-  const stripeTop = H - 78;
-  const bar = 16;
-  const skew = 4;
-  for (let x = ML + skew; x + bar <= W - MR; x += bar * 2) {
-    page.drawSvgPath(`M ${skew} 0 L ${bar + skew} 0 L ${bar} 9 L 0 9 Z`, { x: x - skew, y: stripeTop, color: C.onNight, opacity: 0.9 });
-  }
+  drawStripe(page);
 
   // the site: its address in mono gold, its name in large type, sized down until it fits in three lines
   let y = H - 150;
@@ -408,7 +463,7 @@ function drawCover(doc: PDFDocument, f: Fonts, r: AuditResults, userName: string
   }
 
   page.drawLine({ start: { x: ML, y: 52 }, end: { x: W - MR, y: 52 }, thickness: 0.75, color: C.nightLine });
-  drawMark(page, f, ML, 36, C.gold, C.onNight);
+  drawMark(page, f, ML, 36, pics.markGold, C.onNight);
   const site = 'enclavellc.net';
   page.drawText(site, { x: W - MR - width(site, { font: f.mono, size: MIN, color: C.onNightDim }), y: 36, font: f.mono, size: MIN, color: C.onNightDim });
 }
@@ -817,13 +872,14 @@ export async function generateAuditPdf(rawResults: AuditResults, options?: { use
     doc.setModificationDate(made);
   }
 
-  drawCover(doc, fonts, r, userName);
+  const pics = await embedPictures(doc);
+  drawCover(doc, fonts, pics, r, userName);
   const flow = new Flow(doc, fonts, host);
   drawShortVersion(flow, fonts, r);
   drawAreas(flow, fonts, r, await embedShot(doc, options?.screenshot));
   drawHowMade(flow, fonts, r);
 
   const total = doc.getPageCount();
-  flow.pages.forEach((page, i) => drawFooter(page, fonts, i + 2, total));
+  flow.pages.forEach((page, i) => drawFooter(page, fonts, pics, i + 2, total));
   return doc.save();
 }
