@@ -35,7 +35,7 @@ while a report is made, and nothing is taken from the audited site.
 
 | File | What | Source |
 |---|---|---|
-| `mark-gold.png`, `mark-ink.png` | the Enclave mark, gold for the dark pages, ink for the paper pages | the shape (alpha) of `public/night/logo-mark.png`, the file the site's nav uses |
+| `mark-gold.png`, `mark-ink.png`, `mark-cover.png` | the Enclave mark: gold for the dark pages' footers, ink for the paper pages, and the cover's large one in its top band | the shape (alpha) of `public/logo-icon.png`, the site's logo at 1024 px (the same shape as `public/night/logo-mark.png`, which the Night Crew nav uses) |
 | `isis-office.jpg`, `osiris-office.jpg` | the two AI partners in the office, on the closing studio page, each captioned "AI partner" | the studio's social-page covers `cover-isis-office.jpg`, `cover-osiris-office.jpg`, cropped around the person |
 
 The website itself loads the same families separately (`src/app/night/`: a self-hosted Big Shoulders woff2 and

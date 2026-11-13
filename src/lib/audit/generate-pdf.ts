@@ -80,6 +80,7 @@ function fontFile(key: FontKey): Uint8Array {
 export const PICTURE_FILES = {
   markGold: 'mark-gold.png',
   markInk: 'mark-ink.png',
+  markCover: 'mark-cover.png',
   isis: 'isis-office.jpg',
   osiris: 'osiris-office.jpg',
 } as const;
@@ -369,10 +370,10 @@ class Flow {
 }
 
 // The Enclave mark and the word, on one baseline. Without its picture the word stands alone.
-const MARK_H = 11;
+const MARK_H = 13;
 function drawMark(page: PDFPage, f: Fonts, x: number, baseline: number, mark: PDFImage | undefined, word: RGB) {
   const w = mark ? (MARK_H * mark.width) / mark.height : 0;
-  const drawn = drawPicture(page, mark, { x, y: baseline - 1.5, width: w, height: MARK_H });
+  const drawn = drawPicture(page, mark, { x, y: baseline - 2.5, width: w, height: MARK_H });
   page.drawText('ENCLAVE', { x: drawn ? x + w + 6 : x, y: baseline, font: f.monoMed, size: MIN, color: word });
 }
 
@@ -386,8 +387,7 @@ function drawFooter(page: PDFPage, f: Fonts, pics: Pictures, index: number, tota
 
 // ---------- page 1: the cover ----------
 // the stripe under the head of the dark pages
-function drawStripe(page: PDFPage) {
-  const stripeTop = H - 78;
+function drawStripe(page: PDFPage, stripeTop = H - 78) {
   const bar = 16;
   const skew = 4;
   for (let x = ML + skew; x + bar <= W - MR; x += bar * 2) {
@@ -401,15 +401,24 @@ function drawCover(doc: PDFDocument, f: Fonts, pics: Pictures, r: AuditResults, 
 
   const headA = 'WEBSITE AUDIT';
   const headB = ' · FREE EDITION';
-  page.drawText(headA, { x: ML, y: H - 52, font: f.monoMed, size: MIN, color: C.onNight });
-  page.drawText(headB, { x: ML + width(headA, { font: f.monoMed, size: MIN, color: C.onNight }), y: H - 52, font: f.mono, size: MIN, color: C.onNightDim });
   const date = formatDate(r.auditDate);
+  // the band: the mark and the name on the left; the edition and the date stacked on the right. Without its picture
+  // the name stands alone
+  const markH = 26;
+  const mark = pics.markCover;
+  const mw = mark ? (markH * mark.width) / mark.height : 0;
+  const drawn = drawPicture(page, mark, { x: ML, y: H - 62, width: mw, height: markH });
+  page.drawText('ENCLAVE', { x: drawn ? ML + mw + 10 : ML, y: H - 61, font: f.xbold, size: 24, color: C.onNight });
+  const aw = width(headA, { font: f.monoMed, size: MIN, color: C.onNight });
+  const bw = width(headB, { font: f.mono, size: MIN, color: C.onNightDim });
+  page.drawText(headA, { x: W - MR - aw - bw, y: H - 46, font: f.monoMed, size: MIN, color: C.onNight });
+  page.drawText(headB, { x: W - MR - bw, y: H - 46, font: f.mono, size: MIN, color: C.onNightDim });
   if (date) {
     const dw = width(date, { font: f.mono, size: MIN, color: C.onNightDim });
-    page.drawText(date, { x: W - MR - dw, y: H - 52, font: f.mono, size: MIN, color: C.onNightDim });
+    page.drawText(date, { x: W - MR - dw, y: H - 61, font: f.mono, size: MIN, color: C.onNightDim });
   }
-  page.drawLine({ start: { x: ML, y: H - 62 }, end: { x: W - MR, y: H - 62 }, thickness: 0.75, color: C.nightLine });
-  drawStripe(page);
+  page.drawLine({ start: { x: ML, y: H - 72 }, end: { x: W - MR, y: H - 72 }, thickness: 0.75, color: C.nightLine });
+  drawStripe(page, H - 86);
 
   // the site: its address in mono gold, its name in large type, sized down until it fits in three lines
   let y = H - 150;

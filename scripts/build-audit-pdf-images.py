@@ -5,8 +5,9 @@
 
 Needs Pillow. Every output is sized to the size it is drawn at in the PDF, so the report stays light.
 
-- mark-gold.png, mark-ink.png: the Enclave mark, from the shape (alpha) of public/night/logo-mark.png, the file the site's
-  own nav masks in its colour. Gold (#E8B04B) for the dark cover pages, ink (#1A1714) for the paper pages.
+- mark-gold.png, mark-ink.png, mark-cover.png: the Enclave mark, from the shape (alpha) of public/logo-icon.png, the
+  site's logo at 1024 px (the same shape as public/night/logo-mark.png, which the Night Crew nav masks, at twice its
+  size). Gold (#E8B04B) for the dark pages, ink (#1A1714) for the paper pages; mark-cover.png is the cover's large one.
 - isis-office.jpg, osiris-office.jpg: the office portraits of the two AI partners, cropped around the person.
 """
 import os
@@ -17,10 +18,12 @@ from PIL import Image
 OUT = os.path.join('src', 'lib', 'audit', 'images')
 GOLD = (0xE8, 0xB0, 0x4B)
 INK = (0x1A, 0x17, 0x14)
+# the cover's mark, drawn 26 pt tall: about 700 pixels to the inch
+COVER_MARK_PX = 256
 
 
 def mark(height: int, colour, name: str) -> None:
-    alpha = Image.open(os.path.join('public', 'night', 'logo-mark.png')).convert('RGBA').getchannel('A')
+    alpha = Image.open(os.path.join('public', 'logo-icon.png')).convert('RGBA').getchannel('A')
     alpha = alpha.crop(alpha.getbbox())
     width = round(alpha.width * height / alpha.height)
     alpha = alpha.resize((width, height), Image.LANCZOS)
@@ -42,8 +45,9 @@ if __name__ == '__main__':
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     os.makedirs(OUT, exist_ok=True)
-    mark(96, GOLD, 'mark-gold.png')
-    mark(96, INK, 'mark-ink.png')
+    mark(128, GOLD, 'mark-gold.png')
+    mark(128, INK, 'mark-ink.png')
+    mark(COVER_MARK_PX, GOLD, 'mark-cover.png')
     office(sys.argv[1], 'isis', 0.52)
     office(sys.argv[1], 'osiris', 0.57)
     for name in sorted(os.listdir(OUT)):

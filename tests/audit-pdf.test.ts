@@ -683,6 +683,48 @@ describe('generateAuditPdf', () => {
       return runs
     }
 
+    const GOLD = [0xe8, 0xb0, 0x4b]
+    const INK = [0x1a, 0x17, 0x14]
+    // The picture is the real mark: a transparent ground, crisp in print at the size drawn, the striped shape, the colour.
+    function expectRealMark(mark: DrawnPicture, colour: number[], where: string) {
+      const { width, height, rgb, alpha } = pixelsOf(mark.image)
+      expect(alpha, `${where}: the mark has a transparent ground, so the page shows through`).not.toBeNull()
+      // crisp in print: at least 600 pixels to the inch at the size it is drawn
+      expect(height / (mark.h / 72), `${where}: pixels to the inch`).toBeGreaterThanOrEqual(600)
+      // the shape is the striped mark
+      for (const at of [0.45, 0.6, 0.75]) expect(solidRuns(alpha!, width, height, at), `${where}: solid runs across row ${at}`).toBeGreaterThanOrEqual(4)
+      const solid = alpha!.reduce((n, a) => n + (a >= 128 ? 1 : 0), 0) / (width * height)
+      expect(solid, `${where}: a filled triangle covers half of its box; the mark is mostly gaps`).toBeLessThan(0.4)
+      expect(solid).toBeGreaterThan(0.1)
+      // its colour, where it is solid
+      const at = alpha!.findIndex((a) => a === 255)
+      expect([rgb[at * 3], rgb[at * 3 + 1], rgb[at * 3 + 2]], `${where}: colour of the mark`).toEqual(colour)
+    }
+
+    it('the cover carries the mark large in its top band, gold, beside the name, above the edition line', async () => {
+      const bytes = await generateAuditPdf(reportFixture, { userName: 'Dana Ortiz' })
+      const { drawn } = await drawnPictures(bytes)
+      const band = drawn.filter((d) => d.page === 1 && d.y > 792 - 90)
+      expect(band, 'one picture in the cover band').toHaveLength(1)
+      const mark = band[0]
+      // clearly sized: twice the footer's, at the left margin
+      expect(mark.h).toBeGreaterThanOrEqual(22)
+      expect(mark.x).toBeCloseTo(50, 0)
+      expectRealMark(mark, GOLD, 'cover band')
+      // the name sits right of it, on its row; the edition line and the date stay
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const doc = await pdfjs.getDocument({ data: bytes.slice(), disableFontFace: true, useSystemFonts: false }).promise
+      const items = (await (await doc.getPage(1)).getTextContent()).items.filter((i) => 'str' in i && i.str.trim() !== '') as Array<{ str: string; transform: number[] }>
+      const name = items.find((i) => i.str === 'ENCLAVE' && i.transform[5] > 792 - 90)
+      expect(name, 'ENCLAVE beside the cover mark').toBeDefined()
+      expect(name!.transform[4]).toBeGreaterThan(mark.x + mark.w)
+      expect(name!.transform[5]).toBeGreaterThanOrEqual(mark.y - 2)
+      expect(name!.transform[5]).toBeLessThanOrEqual(mark.y + mark.h)
+      const top = squash(items.filter((i) => i.transform[5] > 792 - 90).map((i) => i.str).join(' '))
+      expect(top).toContain(squash('WEBSITE AUDIT · FREE EDITION'))
+      expect(top).toContain(squash('10 Nov 2026'))
+    })
+
     it('every page carries the real mark in its footer, as a picture: striped like the site logo, not a solid triangle; gold on the cover, ink on paper', async () => {
       const bytes = await generateAuditPdf(reportFixture, { screenshot: PNG_SHOT })
       const { pageCount, drawn } = await drawnPictures(bytes)
@@ -694,20 +736,9 @@ describe('generateAuditPdf', () => {
         const mark = marks[0]
         // the size of a capital in the footer's line, at the left margin, beside the word
         expect(mark.h).toBeGreaterThanOrEqual(9)
-        expect(mark.h).toBeLessThanOrEqual(14)
+        expect(mark.h).toBeLessThanOrEqual(16)
         expect(mark.x).toBeCloseTo(50, 0)
-        const { width, height, rgb, alpha } = pixelsOf(mark.image)
-        expect(alpha, 'the mark has a transparent ground, so the page shows through').not.toBeNull()
-        // crisp in print: at least 600 pixels to the inch at the size it is drawn
-        expect(height / (mark.h / 72)).toBeGreaterThanOrEqual(600)
-        // the shape is the striped mark
-        for (const at of [0.45, 0.6, 0.75]) expect(solidRuns(alpha!, width, height, at), `solid runs across row ${at}`).toBeGreaterThanOrEqual(4)
-        const solid = alpha!.reduce((n, a) => n + (a >= 128 ? 1 : 0), 0) / (width * height)
-        expect(solid, 'a filled triangle covers half of its box; the mark is mostly gaps').toBeLessThan(0.4)
-        expect(solid).toBeGreaterThan(0.1)
-        // its colour, where it is solid
-        const at = alpha!.findIndex((a) => a === 255)
-        expect([rgb[at * 3], rgb[at * 3 + 1], rgb[at * 3 + 2]], `colour of the mark on page ${p}`).toEqual(dark ? [0xe8, 0xb0, 0x4b] : [0x1a, 0x17, 0x14])
+        expectRealMark(mark, dark ? GOLD : INK, `page ${p}`)
       }
       // and no triangle is drawn as a path any more (the old mark: "M 4.5 0 L 9 8.5 L 0 8.5 Z")
       const doc = await PDFDocument.load(bytes)
@@ -727,6 +758,9 @@ describe('generateAuditPdf', () => {
         expect((await drawnPictures(bytes)).drawn).toHaveLength(0)
         const pages = await extract(bytes)
         for (const page of pages) expect(page.lines.some((l) => l.startsWith('ENCLAVE')), page.lines.join(' | ')).toBe(true)
+        // the cover band: the name alone, and the edition line
+        expect(pages[0].lines.filter((l) => l.startsWith('ENCLAVE'))).toHaveLength(2)
+        expect(squash(pages[0].text)).toContain(squash('WEBSITE AUDIT · FREE EDITION'))
         const all = bodyOf(pages)
         for (const fix of reportFixture.fixes) expect(all).toContain(squash(fix.headline))
         expect(all).toContain(squash('Schedule Your Free Consultation'))
@@ -808,8 +842,8 @@ describe('generateAuditPdf', () => {
         const pages = await extract(bytes)
         expect(bodyOf(pages)).not.toContain(squash('ONE STUDIO'))
         expect(squash(pages.at(-1)!.text)).toContain(squash('Thank you for choosing Enclave Development'))
-        // the marks are still there, one per page
-        expect((await drawnPictures(bytes)).drawn).toHaveLength(pages.length)
+        // the marks are still there: one per page, and the cover's large one
+        expect((await drawnPictures(bytes)).drawn).toHaveLength(pages.length + 1)
       } finally {
         jpg.mockRestore()
       }
